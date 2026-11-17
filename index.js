@@ -439,6 +439,10 @@ function buildViews(rows, resolve, offsetMinutes, now) {
       cost: 0,
       priced: cost !== null,
       priceSource: resolved.source,
+      /** CNY per 1M tokens as resolved for this model (null when unpriced). */
+      unitPrice: resolved.price === undefined ? null : { ...resolved.price },
+      /** Epoch ms of the most recent call, so the Client can hide idle models. */
+      lastUsedAt: row.t,
     }
     entry.calls += 1
     entry.input += row.input
@@ -448,6 +452,7 @@ function buildViews(rows, resolve, offsetMinutes, now) {
     entry.tokens += row.input + row.output + row.cacheRead + row.cacheWrite
     if (cost !== null) entry.cost += cost
     else entry.priced = false
+    if (row.t > entry.lastUsedAt) entry.lastUsedAt = row.t
     models.set(row.key, entry)
   }
 

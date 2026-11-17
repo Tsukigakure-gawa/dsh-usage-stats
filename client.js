@@ -43,6 +43,13 @@ window.__ModuleLoader__.load({
         columnModel: 'Model',
         columnTokens: 'Tokens',
         columnCost: 'Est. CNY',
+        columnUnit: '¥/1M',
+        unitTitle: 'CNY per 1M tokens: input / output',
+        chartBars: 'Bars',
+        chartLine: 'Lines',
+        showAllModels: 'Show all models',
+        showRecentOnly: 'Recent only',
+        recentOnlyNote: 'Models idle for 7+ days are hidden:',
         unpriced: 'No rate configured',
         sourceOfficial: 'list price',
         sourceGateway: 'gateway price',
@@ -82,6 +89,13 @@ window.__ModuleLoader__.load({
         columnModel: '模型',
         columnTokens: 'tokens',
         columnCost: '估算 ¥',
+        columnUnit: '￥/百万',
+        unitTitle: '每百万 token 单价：输入 / 输出',
+        chartBars: '柱状',
+        chartLine: '曲线',
+        showAllModels: '显示全部模型',
+        showRecentOnly: '只看近 7 天',
+        recentOnlyNote: '7 天内未使用的模型已隐藏：',
         unpriced: '未配置单价',
         sourceOfficial: '参考价',
         sourceGateway: '网关价',
@@ -227,23 +241,78 @@ window.__ModuleLoader__.load({
 .dsh-us-axis { display:grid; gap:2px; margin-top:6px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:10px; font-variant-numeric:tabular-nums; }
 .dsh-us-axis span { text-align:center; overflow:hidden; white-space:nowrap; }
 .dsh-us-models { display:flex; flex-direction:column; gap:6px; }
-.dsh-us-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; align-items:baseline; padding:4px 0; border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06)); font-variant-numeric:tabular-nums; }
+.dsh-us-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:10px; align-items:baseline; padding:4px 0; border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06)); font-variant-numeric:tabular-nums; }
 .dsh-us-row:first-child { border-top:0; }
 .dsh-us-row-head { color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; border-top:0; padding-bottom:0; }
 .dsh-us-model { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dsh-us-model-tag { color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; margin-left:6px; }
 .dsh-us-note { color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; }
+.dsh-us-line-chart { height:104px; display:block; }
+.dsh-us-line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; stroke-linecap:round; }
+.dsh-us-line-tokens { stroke:var(--dsw-alias-brand-primary,#3b82f6); }
+.dsh-us-line-cost { stroke:var(--dsw-alias-state-success-primary,#10b981); opacity:.85; }
+.dsh-us-mode { display:inline-flex; gap:2px; padding:2px; border-radius:8px; background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.04)); }
+.dsh-us-mode-btn { appearance:none; border:0; background:transparent; color:var(--dsw-alias-label-secondary,#6b7280); font:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; }
+.dsh-us-mode-btn[data-active="true"] { background:var(--dsw-alias-bg-base,#fff); color:var(--dsw-alias-label-primary,#111); box-shadow:0 1px 2px rgba(0,0,0,.10); font-weight:600; }
 .dsh-us-note code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; padding:1px 4px; border-radius:4px; background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.05)); }
 .dsh-us-state { border:1px dashed var(--dsw-alias-border-l1,rgba(0,0,0,.12)); border-radius:12px; padding:22px 16px; text-align:center; color:var(--dsw-alias-label-secondary,#6b7280); font-size:12px; }
 .dsh-us-error { color:var(--dsw-alias-state-error-primary,#dc2626); }
 `
 
-    function Chart({ view, texts }) {
+    /**
+     * Time-series chart. `mode` is `'bars'` (default) or `'lines'`; both read
+     * the same buckets, so switching never re-fetches anything.
+     */
+    function Chart({ view, texts, mode }) {
       const buckets = view?.buckets ?? []
       const maxTokens = buckets.reduce((max, bucket) => Math.max(max, bucket.tokens), 0)
       const maxCost = buckets.reduce((max, bucket) => Math.max(max, bucket.cost), 0)
       const stride = Math.max(1, Math.ceil(buckets.length / 8))
       const columns = { gridTemplateColumns: `repeat(${Math.max(buckets.length, 1)}, minmax(0, 1fr))` }
+
+      const axis = h(
+        'div',
+        { className: 'dsh-us-axis', style: columns },
+        buckets.map((bucket, index) =>
+          h(
+            'span',
+            { key: `${bucket.start}-label-${index}` },
+            index % stride === 0 || index === buckets.length - 1 ? bucketLabel(bucket.start, view.kind) : '',
+          ),
+        ),
+      )
+
+      if (mode === 'lines') {
+        const last = Math.max(buckets.length - 1, 1)
+        const xOf = (index) => (buckets.length <= 1 ? 0 : (index / last) * 100)
+        // 8% headroom so the peak line is not clipped by the viewBox edge
+        const yOf = (value, max) => (max <= 0 ? 100 : 96 - (value / max) * 88)
+        const pointsOf = (pick, max) =>
+          buckets.map((bucket, index) => `${xOf(index).toFixed(2)},${yOf(pick(bucket), max).toFixed(2)}`).join(' ')
+
+        return h(
+          'div',
+          { className: 'dsh-us-chart' },
+          h(
+            'svg',
+            {
+              className: 'dsh-us-line-chart',
+              viewBox: '0 0 100 100',
+              preserveAspectRatio: 'none',
+              role: 'img',
+            },
+            h('polyline', {
+              className: 'dsh-us-line dsh-us-line-tokens',
+              points: pointsOf((bucket) => bucket.tokens, maxTokens),
+            }),
+            h('polyline', {
+              className: 'dsh-us-line dsh-us-line-cost',
+              points: pointsOf((bucket) => bucket.cost, maxCost),
+            }),
+          ),
+          axis,
+        )
+      }
 
       return h(
         'div',
@@ -268,17 +337,7 @@ window.__ModuleLoader__.load({
             )
           }),
         ),
-        h(
-          'div',
-          { className: 'dsh-us-axis', style: columns },
-          buckets.map((bucket, index) =>
-            h(
-              'span',
-              { key: `${bucket.start}-label-${index}` },
-              index % stride === 0 || index === buckets.length - 1 ? bucketLabel(bucket.start, view.kind) : '',
-            ),
-          ),
-        ),
+        axis,
       )
     }
 
@@ -291,6 +350,8 @@ window.__ModuleLoader__.load({
       function UsageSection() {
         const texts = useTexts(ctx)
       const [range, setRange] = useState('hours')
+      const [chartMode, setChartMode] = useState('bars')
+      const [showAllModels, setShowAllModels] = useState(false)
       const [state, setState] = useState({ status: 'loading', data: null, error: null })
       const [tick, setTick] = useState(0)
       const [pending, setPending] = useState(false)
@@ -326,7 +387,32 @@ window.__ModuleLoader__.load({
         { key: 'days30', label: texts.tabDays30 },
         { key: 'months', label: texts.tabMonths },
       ]
-      const models = useMemo(() => (data?.models ?? []).slice(0, 8), [data])
+      const allModels = useMemo(() => data?.models ?? [], [data])
+      const recentCutoff = useMemo(() => Date.now() - 7 * 86400000, [])
+      const models = useMemo(() => {
+        const pool = showAllModels
+          ? allModels
+          : allModels.filter((model) => (model.lastUsedAt ?? 0) >= recentCutoff)
+        return pool.slice(0, 10)
+      }, [allModels, recentCutoff, showAllModels])
+      const hiddenModels = useMemo(
+        () => allModels.filter((model) => (model.lastUsedAt ?? 0) < recentCutoff).length,
+        [allModels, recentCutoff],
+      )
+      const unitText = useMemo(
+        () => (model) => {
+          const price = model.unitPrice
+          if (price === null || price === undefined) return '—'
+          const fmt = (value) => (value >= 10 ? value.toFixed(1) : value.toFixed(2))
+          if (typeof price.rate === 'number') return `¥${fmt(price.rate)}`
+          const input = Number(price.cacheMiss) || 0
+          const output = Number(price.output) || 0
+          if (input > 0 && output > 0 && Math.abs(input - output) > 1e-9) return `¥${fmt(input)}/¥${fmt(output)}`
+          const single = input || output
+          return single > 0 ? `¥${fmt(single)}` : '—'
+        },
+        [],
+      )
       const onRefresh = useCallback(() => setTick((value) => value + 1), [])
 
       return h(
@@ -454,11 +540,35 @@ window.__ModuleLoader__.load({
                         { className: 'dsh-us-legend' },
                         h('span', null, h('i', { style: { background: 'var(--dsw-alias-brand-primary,#3b82f6)' } }), 'tokens'),
                         h('span', null, h('i', { style: { background: 'var(--dsw-alias-state-success-primary,#10b981)' } }), '¥'),
+                        h(
+                          'span',
+                          { className: 'dsh-us-mode' },
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dsh-us-mode-btn',
+                              'data-active': chartMode === 'bars' ? 'true' : 'false',
+                              onClick: () => setChartMode('bars'),
+                            },
+                            texts.chartBars,
+                          ),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dsh-us-mode-btn',
+                              'data-active': chartMode === 'lines' ? 'true' : 'false',
+                              onClick: () => setChartMode('lines'),
+                            },
+                            texts.chartLine,
+                          ),
+                        ),
                       ),
                     ),
-                    h(Chart, { view, texts }),
+                    h(Chart, { view, texts, mode: chartMode }),
                   ),
-                  models.length === 0
+                  allModels.length === 0
                     ? null
                     : h(
                         'section',
@@ -467,6 +577,20 @@ window.__ModuleLoader__.load({
                           'div',
                           { className: 'dsh-us-section-head' },
                           h('div', { className: 'dsh-us-section-title' }, texts.breakdownAll),
+                          h(
+                            'div',
+                            { className: 'dsh-us-legend' },
+                            h(
+                              'button',
+                              {
+                                type: 'button',
+                                className: 'dsh-us-mode-btn',
+                                title: `${hiddenModels} ${texts.recentOnlyNote}`,
+                                onClick: () => setShowAllModels((previous) => !previous),
+                              },
+                              showAllModels ? texts.showRecentOnly : `${texts.showAllModels}${hiddenModels > 0 ? ` (${hiddenModels})` : ''}`,
+                            ),
+                          ),
                         ),
                         h(
                           'div',
@@ -476,8 +600,12 @@ window.__ModuleLoader__.load({
                             { className: 'dsh-us-row dsh-us-row-head' },
                             h('div', null, texts.columnModel),
                             h('div', null, texts.columnTokens),
+                            h('div', { title: texts.unitTitle }, texts.columnUnit),
                             h('div', null, texts.columnCost),
                           ),
+                          models.length === 0
+                            ? h('div', { className: 'dsh-us-note' }, texts.recentOnlyNote)
+                            : null,
                           models.map((model) =>
                             h(
                               'div',
@@ -497,6 +625,7 @@ window.__ModuleLoader__.load({
                                   : h('span', { className: 'dsh-us-model-tag' }, `· ${texts.unpriced}`),
                               ),
                               h('div', null, formatTokens(model.tokens)),
+                              h('div', { title: texts.unitTitle }, unitText(model)),
                               h('div', null, model.priced ? formatMoney(model.cost, texts) : '—'),
                             ),
                           ),
