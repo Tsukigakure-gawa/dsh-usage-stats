@@ -254,7 +254,6 @@ window.__ModuleLoader__.load({
 .dsh-us-mode { display:inline-flex; gap:2px; padding:2px; border-radius:8px; background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.04)); }
 .dsh-us-mode-btn { appearance:none; border:0; background:transparent; color:var(--dsw-alias-label-secondary,#6b7280); font:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; }
 .dsh-us-mode-btn[data-active="true"] { background:var(--dsw-alias-bg-base,#fff); color:var(--dsw-alias-label-primary,#111); box-shadow:0 1px 2px rgba(0,0,0,.10); font-weight:600; }
-.dsh-us-plot { position:relative; height:104px; }
 .dsh-us-overlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 .dsh-us-guide { position:absolute; top:0; bottom:0; width:1px; background:var(--dsw-alias-border-l2,rgba(0,0,0,.2)); pointer-events:none; }
 .dsh-us-tip { position:absolute; bottom:calc(100% + 6px); z-index:5; pointer-events:none; background:var(--dsw-alias-bg-base,#fff); border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.1)); border-radius:8px; padding:6px 9px; font-size:11px; line-height:1.55; white-space:nowrap; box-shadow:0 6px 18px rgba(0,0,0,.14); font-variant-numeric:tabular-nums; }
@@ -263,22 +262,31 @@ window.__ModuleLoader__.load({
 .dsh-us-tip-end { transform:translateX(-100%); }
 .dsh-us-tip-head { font-weight:600; margin-bottom:2px; }
 .dsh-us-tip-sub { color:var(--dsw-alias-label-secondary,#6b7280); }
-.dsh-us-scale { display:flex; justify-content:space-between; margin-top:4px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:10px; font-variant-numeric:tabular-nums; }
-.dsh-us-cols { display:grid; gap:2px; align-items:end; height:104px; }.dsh-us-note code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; padding:1px 4px; border-radius:4px; background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.05)); }
+.dsh-us-cols { display:grid; gap:2px; align-items:end; height:46px; }
+.dsh-us-lanes { position:relative; display:flex; flex-direction:column; gap:10px; }
+.dsh-us-lane { display:grid; grid-template-columns:38px minmax(0,1fr) 52px; gap:8px; align-items:stretch; }
+.dsh-us-lane-title { font-size:10px; color:var(--dsw-alias-label-secondary,#6b7280); text-align:right; align-self:center; font-variant-numeric:tabular-nums; }
+.dsh-us-lane-plot { position:relative; height:46px; }
+.dsh-us-lane-axis { display:flex; flex-direction:column; justify-content:space-between; height:46px; font-size:9px; color:var(--dsw-alias-label-secondary,#6b7280); font-variant-numeric:tabular-nums; }
 .dsh-us-state { border:1px dashed var(--dsw-alias-border-l1,rgba(0,0,0,.12)); border-radius:12px; padding:22px 16px; text-align:center; color:var(--dsw-alias-label-secondary,#6b7280); font-size:12px; }
 .dsh-us-error { color:var(--dsw-alias-state-error-primary,#dc2626); }
 `
 
     /**
-     * Time-series chart.
+     * Time-series chart with TWO adaptive Y axes.
+     *
+     * Tokens and CNY differ by orders of magnitude, so they get their own lane
+     * instead of sharing one axis: the top lane is tokens, the bottom lane is
+     * money, each scaled to its own maximum (labels at the right edge). Lanes
+     * never overlap, so "the line went up" is never ambiguous.
      *
      * `mode`:
-     *   'bars'  — token (blue) and cost (green) bars side by side per bucket
-     *   'lines' — the same two series as polylines
-     *   'mixed' — token bars with the cost line drawn on top
+     *   'bars'  — both lanes as bars
+     *   'lines' — both lanes as polylines
+     *   'mixed' — tokens bars on top, cost line below
      *
-     * All three read the same buckets, so switching never re-fetches.
-     * Hovering the plot shows a tooltip with the exact numbers of that bucket.
+     * Hovering shows one tooltip with both series for that bucket plus a guide
+     * line spanning both lanes.
      */
     function Chart({ view, texts, mode }) {
       const buckets = useMemo(() => view?.buckets ?? [], [view])
@@ -288,75 +296,48 @@ window.__ModuleLoader__.load({
       const maxCost = buckets.reduce((max, bucket) => Math.max(max, bucket.cost), 0)
       const stride = Math.max(1, Math.ceil(count / 8))
       const columns = { gridTemplateColumns: `repeat(${Math.max(count, 1)}, minmax(0, 1fr))` }
-
       const last = Math.max(count - 1, 1)
       const xOf = (index) => (count <= 1 ? 0 : (index / last) * 100)
-      // 8% headroom top and bottom so peaks and the zero line stay inside the box
-      const yOf = (value, max) => (max <= 0 ? 92 : 92 - (value / max) * 84)
+      const yOf = (value, max) => (max <= 0 ? 96 : 96 - (value / max) * 92)
       const pointsOf = (pick, max) =>
         buckets.map((bucket, index) => `${xOf(index).toFixed(2)},${yOf(pick(bucket), max).toFixed(2)}`).join(' ')
 
-      const axis = h(
-        'div',
-        { className: 'dsh-us-axis', style: columns },
-        buckets.map((bucket, index) =>
-          h(
-            'span',
-            { key: `${bucket.start}-label-${index}` },
-            index % stride === 0 || index === count - 1 ? bucketLabel(bucket.start, view.kind) : '',
-          ),
-        ),
-      )
-
-      const bars = h(
-        'div',
-        { className: 'dsh-us-cols', style: columns },
-        buckets.map((bucket, index) => {
-          const tokenPx = maxTokens === 0 ? 0 : Math.round((bucket.tokens / maxTokens) * 74)
-          const costPx = maxCost === 0 ? 0 : Math.round((bucket.cost / maxCost) * 20)
-          return h(
-            'div',
-            { className: 'dsh-us-col', key: `bar-${bucket.start}-${index}` },
-            h('div', {
-              className: 'dsh-us-bar dsh-us-bar-tokens',
-              style: { height: bucket.tokens === 0 ? 0 : `${Math.max(tokenPx, bucket.tokens > 0 ? 2 : 0)}px` },
-            }),
-            mode === 'mixed'
-              ? null
-              : h('div', {
-                  className: 'dsh-us-bar dsh-us-bar-cost',
-                  style: { height: bucket.cost === 0 ? 0 : `${Math.max(costPx, bucket.cost > 0 ? 2 : 0)}px` },
-                }),
-          )
-        }),
-      )
-
-      const series = (which) =>
+      const barsOf = (pick, max, barClass) =>
         h(
-          'svg',
-          {
-            className: 'dsh-us-overlay',
-            viewBox: '0 0 100 100',
-            preserveAspectRatio: 'none',
-            role: 'img',
-            'aria-label': 'trend',
-          },
-          which.includes('tokens')
-            ? h('polyline', {
-                className: 'dsh-us-line dsh-us-line-tokens',
-                points: pointsOf((bucket) => bucket.tokens, maxTokens),
-              })
-            : null,
-          which.includes('cost')
-            ? h('polyline', {
-                className: 'dsh-us-line dsh-us-line-cost',
-                points: pointsOf((bucket) => bucket.cost, maxCost),
-              })
-            : null,
+          'div',
+          { className: 'dsh-us-cols', style: columns },
+          buckets.map((bucket, index) => {
+            const value = pick(bucket)
+            const px = max === 0 ? 0 : Math.round((value / max) * 42)
+            return h(
+              'div',
+              { className: 'dsh-us-col', key: `${barClass}-${bucket.start}-${index}` },
+              h('div', {
+                className: `dsh-us-bar ${barClass}`,
+                style: { height: value === 0 ? 0 : `${Math.max(px, 2)}px` },
+              }),
+            )
+          }),
         )
 
-      const body =
-        mode === 'lines' ? series(['tokens', 'cost']) : mode === 'mixed' ? [bars, series(['cost'])] : bars
+      const lineOf = (pick, max, lineClass) =>
+        h(
+          'svg',
+          { className: 'dsh-us-overlay', viewBox: '0 0 100 100', preserveAspectRatio: 'none', role: 'img', 'aria-label': lineClass },
+          h('polyline', { className: `dsh-us-line ${lineClass}`, points: pointsOf(pick, max) }),
+        )
+
+      const tokensBody = mode === 'lines' ? lineOf((b) => b.tokens, maxTokens, 'dsh-us-line-tokens') : barsOf((b) => b.tokens, maxTokens, 'dsh-us-bar-tokens')
+      const costBody = mode === 'bars' ? barsOf((b) => b.cost, maxCost, 'dsh-us-bar-cost') : lineOf((b) => b.cost, maxCost, 'dsh-us-line-cost')
+
+      const lane = (title, body, top, bottom) =>
+        h(
+          'div',
+          { className: 'dsh-us-lane' },
+          h('div', { className: 'dsh-us-lane-title' }, title),
+          h('div', { className: 'dsh-us-lane-plot' }, body),
+          h('div', { className: 'dsh-us-lane-axis' }, h('span', null, top), h('span', null, bottom)),
+        )
 
       const onMove = (event) => {
         const rect = event.currentTarget.getBoundingClientRect()
@@ -386,12 +367,10 @@ window.__ModuleLoader__.load({
             `${formatTokens(bucket.input)} in · ${formatTokens(bucket.output)} out · ${texts.cacheRead} ${formatTokens(bucket.cacheRead)}`,
           ),
         )
-        if (mode !== 'bars') {
-          guide = h('div', {
-            className: 'dsh-us-guide',
-            style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` },
-          })
-        }
+        guide = h('div', {
+          className: 'dsh-us-guide',
+          style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` },
+        })
       }
 
       return h(
@@ -399,17 +378,22 @@ window.__ModuleLoader__.load({
         { className: 'dsh-us-chart' },
         h(
           'div',
-          { className: 'dsh-us-plot', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
-          body,
+          { className: 'dsh-us-lanes', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
+          lane('tokens', tokensBody, formatTokens(maxTokens), '0'),
+          lane('¥', costBody, formatMoney(maxCost, texts), '0'),
           guide,
           tooltip,
         ),
-        axis,
         h(
           'div',
-          { className: 'dsh-us-scale' },
-          h('span', null, `▲ ${formatTokens(maxTokens)} tokens`),
-          h('span', null, `▲ ${formatMoney(maxCost, texts)}`),
+          { className: 'dsh-us-axis', style: columns },
+          buckets.map((bucket, index) =>
+            h(
+              'span',
+              { key: `${bucket.start}-label-${index}` },
+              index % stride === 0 || index === count - 1 ? bucketLabel(bucket.start, view.kind) : '',
+            ),
+          ),
         ),
       )
     }
