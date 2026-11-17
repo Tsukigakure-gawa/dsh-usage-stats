@@ -11,10 +11,12 @@
  * `message.source.{provider,model}`, so the whole statistic is a fold over
  * committed session events — no new storage, no polling of the model.
  *
- * Cost is an ESTIMATE, but not a guess: rates live in this row's
- * `config.pricing` (CNY per million tokens) and default to blended rates
- * back-computed from the user's real invoices (`rate` shape). A model without
- * a matching rule contributes tokens but no cost, and the page says so.
+ * Cost is an ESTIMATE: rates live in this row's `config.pricing`
+ * (CNY per million tokens). An invoice states money over tokens and never the
+ * cache split, so the honest default shape is one blended rate per model.
+ * Replace the sample rates below with rates back-computed from your own
+ * invoice; a model without a matching rule contributes tokens but no cost,
+ * and the page says so.
  */
 
 const ROUTE_PREFIX = '/usage-stats/api'
@@ -26,27 +28,18 @@ const PER_UNIT = 1_000_000
 const MAX_TZ_MINUTES = 14 * 60
 
 /**
- * Rates used when the row's `config.pricing` is absent (CNY / 1M tokens).
+ * Sample rates used when the row's `config.pricing` is absent (CNY / 1M tokens).
  *
- * These are NOT list prices: they are blended rates derived from the user's own
- * 2026-10 invoices — DeepSeek ¥240.56 over 2.05B tokens, FluxToken ¥41.08 over
- * 13.88M tokens, split per model from FluxToken's "actual" column. A real
- * invoice states money over tokens, never the cache-miss/hit/output split, so
- * one blended rate per model is the honest shape.
+ * These are PLACEHOLDERS, not list prices and not anyone's real bill. Derive
+ * your own from an invoice (`amount / tokens * 1e6`) and put them in
+ * `config.pricing`; `*` is the catch-all bucket.
  */
 const DEFAULT_PRICING = {
-  'deepseek-account/*': { rate: 0.1171 },
-  'deepseek-official/*': { rate: 0.1171 },
-  'fluxtoken/claude-opus-4-8': { rate: 5.2527 },
-  'fluxtoken/claude-opus-5-5': { rate: 1.7056 },
-  'fluxtoken/claude-sonnet-4-6': { rate: 0.8122 },
-  'fluxtoken/claude-sonnet-5-5': { rate: 0.6622 },
-  'fluxtoken/claude-fable-5-1': { rate: 4.584 },
-  'fluxtoken/*': { rate: 2.9587 },
-  'openai/*': { rate: 3.28 },
+  'example-provider/*': { rate: 1.0 },
+  '*': { rate: 1.0 },
 }
 
-const DEFAULT_BASIS = '2026-10 账单反推 · DeepSeek ¥240.56/2.05B tokens · FluxToken ¥41.08/13.88M tokens'
+const DEFAULT_BASIS = '示例单价（请在 config.pricing 里换成自己账单反推的值）'
 
 /** One numeric token field, tolerating absent or malformed values. */
 function num(value) {

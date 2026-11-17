@@ -1,39 +1,29 @@
 # dsh-usage-stats bundle patch.
 #
-# One Host row: it registers the /usage-stats/api prefix route the Client half
-# reads.
+# One Host row: it registers the /usage-stats/api prefix route that the Client
+# half reads.
 #
 # `pricing` rules are CNY per 1M tokens and come in two shapes:
-#   'provider/model': { rate: 5.25 }                        # one blended price
-#   'provider/*':     { cacheMiss: 2, cacheHit: 0.5, output: 8 }  # split price
+#   'provider/model': { rate: 5.25 }                               # one blended price
+#   'provider/*':     { cacheMiss: 2, cacheHit: 0.5, output: 8 }    # split price
 # Matching order: `provider/model` -> `provider/*` -> `*`. A model with no
 # matching rule still counts tokens, but adds no cost (the page lists it).
 #
-# The defaults below are NOT list prices. They are back-computed from the real
-# 2026-10 invoices (DeepSeek ¥240.56 over 2,054,704,056 tokens; FluxToken
-# ¥41.0751 over 13.88M tokens, per-model rates taken from its "actual" column),
-# because an invoice states money over tokens and never the cache split.
+# The values below are PLACEHOLDERS. Replace them with rates derived from your
+# own invoice (amount / tokens * 1e6); an invoice states money over tokens and
+# never the cache-miss/hit/output split, so the blended `rate` shape is usually
+# the honest one.
 - insert:
     - id: usage-stats
       name: 'dsh-usage-stats'
       config:
-        basis: '2026-10 账单反推 · DeepSeek ¥240.56/2.05B tokens · FluxToken ¥41.08/13.88M tokens'
+        basis: '示例单价，请按自己的账单改'
         pricing:
-          'deepseek-account/*':
-            rate: 0.1171
-          'deepseek-official/*':
-            rate: 0.1171
-          'fluxtoken/claude-opus-4-8':
-            rate: 5.2527
-          'fluxtoken/claude-opus-5-5':
-            rate: 1.7056
-          'fluxtoken/claude-sonnet-4-6':
-            rate: 0.8122
-          'fluxtoken/claude-sonnet-5-5':
-            rate: 0.6622
-          'fluxtoken/claude-fable-5-1':
-            rate: 4.584
-          'fluxtoken/*':
-            rate: 2.9587
-          'openai/*':
-            rate: 3.28
+          '*':
+            rate: 1.0
+          'example-provider/*':
+            rate: 1.0
+          'example-provider/big-model':
+            cacheMiss: 15
+            cacheHit: 1.5
+            output: 75

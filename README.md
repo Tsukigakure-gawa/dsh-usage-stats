@@ -1,103 +1,143 @@
 # dsh-usage-stats
 
-用量统计：设置页里新增一个「用量统计」区块，按时间段显示 tokens 与估算人民币花费。
+DeepSeek Harness 插件：在**设置页**里加一个「用量统计」区块，按时间段显示 token 用量与**估算**花费。
 
-## 它做什么
+> 花费是估算，不是账单。插件把会话日志里每次模型调用的 `usage` 折成时段桶，再乘你在配置里填的单价。
+> 想要接近真实账单，请用自己账单反推单价后填进 `config.pricing`（见下文）。
 
-- 主机侧扫描全部会话日志，把每条 `assistant/message` 上的 `usage`
-  （`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`）
-  连同 `message.source.{provider,model}` 折成时段桶。
-- 四个视图：今日（按小时）、近 7 天（按天）、近 30 天（按天）、全部（按月）。
-- 花费是**估算**：按 `config.pricing` 的单价乘出来。没有匹配单价的模型只计 tokens，
-  页面会列出「未配置单价」的供应商。
-- 首次扫描会重放全部历史会话（几秒）；之后按 `sessionPersistence.stat` 的 revision
-  跳过没变过的会话，只重放变化的那些。
+---
 
-## 数据通路
+# 第一部分：给人看
 
-Host 半边注册一条同源 JSON 路由（`POST /usage-stats/api/stats`，带
-`ctx.connection.requestRejection` 信任栅栏），Client 半边从页面同源 `fetch` 它，
-不经过任何第三方服务，也不写任何文件。
+## 它显示什么
 
-## 配置
+- **四个时间段**：今日（按小时）、近 7 天（按天）、近 30 天（按天）、全部（按月）
+- **每个桶里**：输入 / 输出 / 缓存读 / 缓存写 tokens，以及估算金额（¥）
+- **按模型明细**：每个 `provider/model` 的合计（全部时间）
+- **未配置单价的模型**会单独列出来，只计 tokens 不算钱 —— 页面会把它们列在下面提醒你
 
-单价单位是「元 / 百万 token」，改 `cordis.patch.yml` 里 `usage-stats` 行的
-`config.pricing`。一条规则有两种形状：
+## 安装
+
+1. 把整个目录放进 Harness profile 的 `node_modules/` 下，目录名 `dsh-usage-stats`
+2. 在 profile 的 Cordis 配置里应用 `cordis.patch.yml`（它只插入一行 Host 配置）
+3. 重启 / 重载 Harness，打开 **设置 → 用量统计**
+
+> 依赖 Harness 的「设置页扩展」与「同源自定义路由」两个能力。Host 半边读会话日志，
+> Client 半边只做渲染；不需要额外服务、不写任何文件、不联网。
+
+## 配置单价（关键一步）
+
+打开 `cordis.patch.yml`，改 `usage-stats` 这一行的 `config.pricing`。单位是 **元 / 百万 token**。
+
+两种写法：
 
 ```yaml
-- id: usage-stats
-  name: 'dsh-usage-stats'
-  config:
-    basis: '2026-10 账单反推'      # 页脚展示的「单价依据」，纯文本
-    pricing:
-      'deepseek-account/*':        # provider 通配
-        rate: 0.1171               # ① 单一均价：所有 token 一个价
-      'fluxtoken/claude-opus-5-5': # 精确到 provider/model
-        rate: 1.7056
-      'fluxtoken/claude-opus-4-8':
-        cacheMiss: 15              # ② 分档价：你手上有 cache/输出 拆分时用
-        cacheHit: 1.5
-        output: 75
+pricing:
+  # ① 混合均价：所有 token 一个价（账单只给「总金额 ÷ 总 tokens」时用这个）
+  'my-provider/*':
+    rate: 1.23
+
+  # ② 分档价：你手上有 cache / 输出 的拆分时用
+  'my-provider/big-model':
+    cacheMiss: 15
+    cacheHit: 1.5
+    output: 75
 ```
 
-匹配顺序：`provider/model` → `provider/*` → `*`。分档形状下 `cacheWrite` 计入 `cacheMiss`。
+匹配顺序：`provider/model` → `provider/*` → `*`。
+分档形状下 **cacheWrite 计入 cacheMiss**。
 
-**默认单价不是官方价，是从你自己的账单反推的混合均价**（因为账单只给「总金额 ÷ 总
-tokens」，不给 cache/输出拆分）：
+**怎么反推单价**：拿一次账单，`金额 ÷ tokens × 1,000,000`。
+如果账单只有一个总数，就用混合均价；同一 provider 内不同模型价格差很多时，
+建议拆成 `provider/model` 逐条填。
 
-| provider | 依据 | 反推单价 |
-| --- | --- | --- |
-| `deepseek-account/*` | ¥240.56 ÷ 2,054,704,056 tokens（2026-10） | **0.1171** |
-| `fluxtoken/claude-opus-4-8` | ¥29.57 ÷ 5.63M | 5.2527 |
-| `fluxtoken/claude-opus-5-5` | ¥7.30 ÷ 4.28M | 1.7056 |
-| `fluxtoken/claude-sonnet-4-6` | ¥2.12 ÷ 2.61M | 0.8122 |
-| `fluxtoken/claude-sonnet-5-5` | ¥0.580 ÷ 875.88K | 0.6622 |
-| `fluxtoken/claude-fable-5-1` | ¥0.438 ÷ 95.54K | 4.584 |
-| `fluxtoken/*`（兜底） | ¥41.0751 ÷ 13.88M | 2.9587 |
-| `openai/*`（兜底） | `gpt-6-astra`：¥0.281 ÷ 85.67K | 3.28 |
-
-账单换了就改这张表，或把 `basis` 改成人话说明新依据。
-
-## 为什么不直接抓两家面板的接口
-
-两条路都试过了，都不通：
-
-- **FluxToken**：面板端点是真的（`/api/v1/usage/dashboard/{stats,trend,models}`），
-  但它认浏览器 `localStorage.auth_token`（JWT）。用 `FLUXTOKEN_API_KEY`（`sk-…`）
-  请求返回 `401 INVALID_TOKEN`；OpenAI 兼容的 `/v1/dashboard/billing/*` 是 404。
-  不想为此把长期 JWT 存进本地。
-- **DeepSeek Platform**：`platform.deepseek.com` 对非浏览器请求直接
-  「Request Blocked」；DSH 只托管了「余额」这一个官方能力，没有账单接口。
-
-要做「真账单」只剩两条路，需要你点头：
-
-1. **余额账本**：定时采样账户余额（`deepseekAccount.getBalance`），存本地小账本，
-   按天算真实花费（充值当成余额上升自动排除）。只覆盖 deepseek-account，FluxToken
-   没有余额接口。
-2. **一次性抓取**：你从浏览器 DevTools 复制一次 FluxToken 的 Bearer token，
-   我把真实日账单拉下来落成静态基准。token 过期后需要重贴。
+`basis` 是页脚展示的一句说明，写成你这次的依据就行（例如「2026-11 账单反推」）。
 
 ## 已知限制
 
-- 估算按「均价 × tokens」算；同一 provider 内 cache 命中率变化大时会有偏差
-  （FluxToken 的 opus-4-8 ¥5.25/M 与 sonnet-4-6 ¥0.81/M 差 6 倍，就是缓存比例不同）。
-- 只统计 `assistant/message` 记录的调用；被日志重写（surface replace）覆盖的调用仍计入，
-  因为钱确实花掉了。
-- 日志只是这台机器这台 Harness 的用量；同一账号在别处（其它工具/机器）的消费不在这里，
-  所以「全部」不会等于平台账单的累计值。
-- 时区按浏览器自己的 UTC 偏移分桶，跨时区旅行后历史桶会跟着偏移重算。
-- 首次打开要重放全部历史会话（约 1–5 秒，取决于日志体积），页面会显示「正在读取会话日志」；
-  之后只重放 revision 变过的会话。重启应用后的第一次同样会慢一次。
-- 「按模型」那张表是**全部时间**的合计，不随上面的时段切换。
+- 估算按「单价 × tokens」算；同一 provider 内缓存命中率波动大时会有偏差
+- 只统计 `assistant/message` 里记录的调用；日志被重写覆盖的调用仍计入（钱确实花了）
+- 只统计**这台机器这份 Harness** 的用量；同账号在别处消费不会出现在这里
+- 时区按浏览器当前 UTC 偏移分桶；换时区后历史桶会按新偏移重算
+- 首次打开要重放全部历史会话（约 1–5 秒，取决于日志体积），之后只重放变化过的会话
 
-## 自检
+## 许可
 
-改完代码后可以离线跑一遍（不依赖正在运行的 Harness）：
+个人自用插件，未附许可证文件。要用请自行判断。
 
-```powershell
-$env:ELECTRON_RUN_AS_NODE=1
-& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\DeepSeek Harness.exe" scripts\verify.mjs
+---
+
+# 第二部分：给 agent 看
+
+> 这一节是给自动化 agent / 未来的维护者看的：契约、不变量、易错点。
+
+## 文件地图
+
+| 文件 | 角色 |
+| --- | --- |
+| `index.js` | **Host 半边**：注册同源路由、扫描会话日志、折叠成时段桶、算钱 |
+| `client.js` | **Client 半边**：设置页区块组件，`fetch` 同源路由并渲染 |
+| `cordis.patch.yml` | 唯一一行 Host 配置插入（`id: usage-stats`），含 `pricing` / `basis` |
+| `locale/en.json`、`locale/zh.json` | 文案；键名两边必须对称 |
+| `icon.svg` | 设置页图标 |
+| `package.json` | `exports` 映射与 `dsh.bundle` / `dsh.client` 声明 |
+
+## 数据通路（必须保持）
+
+```
+Client (设置页)  --POST /usage-stats/api/stats-->  Host (index.js)
+                                                     ↓ 读 $DSH_HOME/sessions
+                                                     ↓ 折叠 assistant/message.usage
+                                                     ← 同源 JSON
 ```
 
-它会用 `$DSH_HOME/sessions` 里的真实日志跑一遍 Host 折叠，再把结果喂给 Client 组件渲染，
-最后检查屏幕文本里有没有 `undefined` / `NaN` / 缺 `¥`。需要带 zstd 的 Node（22.15+ / 24）。
+- 只有一条路由：`/usage-stats/api/stats`（`ROUTE_PREFIX` = `/usage-stats/api`）
+- Host 侧用 `ctx.connection.requestRejection` 做同源信任栅栏；**不要**去掉
+- 请求体上限 `MAX_BODY_BYTES = 64 KiB`
+- 不写文件、不联网、不新增存储：统计完全来自会话日志的折叠
+
+## 折叠规则（不变量）
+
+1. 每条 `assistant/message` 的 `usage` 取 `inputTokens` / `outputTokens` /
+   `cacheReadTokens` / `cacheWriteTokens`，非有限或负值按 0（`num()`）
+2. 模型身份取 `message.source.{provider,model}`，缺失时用 `unknown`
+3. **日志重写不退款**：被 surface replace 覆盖的副本仍计入
+4. 增量重放依据 `sessionPersistence.stat` 的 revision：没变过的会话跳过
+5. 分桶按调用方传入的 `tzOffsetMinutes`（浏览器 UTC 偏移），并对越界值钳制
+   （`MAX_TZ_MINUTES = 840`）
+6. 花费 = `tokens / 1e6 × rate`；分档形状下 cacheWrite 归入 cacheMiss
+7. 没有匹配规则的模型：计 tokens，**不计钱**，并在响应里列出，供页面提示
+
+## 配置 schema（`config`）
+
+```ts
+{
+  basis?: string,                          // 页脚说明，纯文本
+  pricing?: {
+    [pattern: string]:                    // 'provider/model' | 'provider/*' | '*'
+      | { rate: number }                  // 混合均价，元/百万 token
+      | { cacheMiss: number, cacheHit: number, output: number }
+  }
+}
+```
+
+匹配优先级：精确 `provider/model` → `provider/*` → `*`。
+`DEFAULT_PRICING` 里的值是**占位符**，只为开箱能跑；不要把它当成真实价格。
+
+## 改动时容易踩的坑
+
+- **locale 键必须对称**：只加 `zh.json` 的键会让 `en` 语言下显示原始键名
+- **不要改路由前缀**：`client.js` 里 `new URL('usage-stats/api/stats', base)` 是相对路径，
+  改一边就会 404
+- **`document` 可能不存在**：`client.js` 用 `typeof document === 'undefined'` 兜底，
+  这样同一份代码能在非浏览器环境里被引用（保持这个判断）
+- **首次扫描的性能**：全量重放是 O(会话数 × 事件数)，别在里面加同步 IO
+- **金额精度**：全程用 number，展示时再格式化；不要在中间步骤四舍五入
+
+## 自检思路
+
+没有打包独立的测试脚本（历史脚本含本机绝对路径，已移除）。改动后建议：
+
+1. 用真实 `$DSH_HOME/sessions` 跑一遍折叠，断言：总 tokens 与逐桶求和一致；
+2. 给 Client 组件喂一份构造的响应，检查文本里没有 `undefined` / `NaN`、金额带 `¥`；
+3. 换一个 `pricing` 规则（改 `cordis.patch.yml`）后重载，确认「未配置单价」列表相应变化。

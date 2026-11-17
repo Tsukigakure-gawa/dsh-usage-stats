@@ -17,7 +17,6 @@
     "README.md",
     "locale/*.json",
     "icon.svg",
-    "scripts/verify.mjs"
   ],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
@@ -27,3 +26,4 @@
     }
   }
 }
+
