@@ -71,8 +71,8 @@ const OFFICIAL_TABLE = [
   { models: [/claude.*haiku/], usd: { in: 0.8, out: 4 } },
   { models: [/^gpt-4o-mini/], usd: { in: 0.15, out: 0.6 } },
   { models: [/^gpt-4o/], usd: { in: 2.5, out: 10 } },
-  { models: [/^gpt-4\.1-mini/], usd: { in: 0.4, out: 1.6 } },
-  { models: [/^gpt-4\.1/], usd: { in: 2, out: 8 } },
+  { models: [/^gpt-4-1-mini/], usd: { in: 0.4, out: 1.6 } },
+  { models: [/^gpt-4-1/], usd: { in: 2, out: 8 } },
   { models: [/^o[34](-mini)?$/], usd: { in: 1.1, out: 4.4 } },
   { models: [/gemini.*flash/], usd: { in: 0.3, out: 2.5 } },
   { models: [/gemini.*pro/], usd: { in: 1.25, out: 10 } },
@@ -93,8 +93,10 @@ function canonicalModel(key) {
   name = name.replace(/[-_](19|20)\d{6}$/, '')
   name = name.replace(/[-_](19|20)\d{2}[-_]\d{2}[-_]\d{2}$/, '')
   name = name.replace(/\[[^\]]*\]$/, '')
-  name = name.replace(/[-_](latest|preview|beta|free|v\d+)$/, '')
+  name = name.replace(/:[a-z0-9_-]+$/, '')   // openrouter 的 :batch / :free / :online 变体
+  name = name.replace(/[-_](latest|preview|beta|free)$/, '')
   name = name.replace(/_/g, '-')
+  name = name.replace(/\./g, '-')            // claude-sonnet-4.6 -> claude-sonnet-4-6
   return name
 }
 
