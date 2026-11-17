@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
         columnUnit: '¥/1M',
         unitTitle: 'CNY per 1M tokens: input / output',
         chartBars: 'Bars',
-        chartLine: 'Lines',
+        chartLine: 'Curves',
         chartMixed: 'Mixed',
         showAllModels: 'Show all models',
         showRecentOnly: 'Recent only',
@@ -234,9 +234,9 @@ window.__ModuleLoader__.load({
 .dsh-us-legend { display:flex; gap:12px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; }
 .dsh-us-legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:1px; }
 .dsh-us-chart { display:flex; flex-direction:column; }
-.dsh-us-col { display:flex; align-items:flex-end; justify-content:center; gap:1px; height:100%; min-width:0; }
+.dsh-us-col { display:flex; flex-direction:column; justify-content:flex-end; gap:2px; height:100%; min-width:0; }
 .dsh-us-col:hover .dsh-us-bar { filter:brightness(1.12); }
-.dsh-us-bar { border-radius:2px 2px 1px 1px; min-height:0; }
+.dsh-us-bar { width:100%; border-radius:2px 2px 1px 1px; min-height:0; }
 .dsh-us-bar-tokens { background:var(--dsw-alias-brand-primary,#3b82f6); }
 .dsh-us-bar-cost { background:var(--dsw-alias-state-success-primary,#10b981); opacity:.85; }
 .dsh-us-dual { display:grid; grid-template-columns:46px minmax(0,1fr) 58px; gap:6px; align-items:stretch; }
@@ -278,18 +278,16 @@ window.__ModuleLoader__.load({
      * - Left axis (primary)  = tokens, adaptive to maxTokens
      * - Right axis (secondary) = CNY, adaptive to maxCost
      *
-     * That is the standard dual-axis shape (one shared baseline, two scales);
-     * putting the two series in separate panels would hide the very
-     * correlation the chart exists to show.
-     *
      * `mode`:
-     *   'bars'  — tokens bars (left axis) + cost bars (right axis), side by side
-     *   'lines' — tokens solid line (left) + cost dashed line (right)
-     *   'mixed' — tokens bars (left) + cost dashed line (right)  ← the usual combo
+     *   'bars'   — stacked bars per bucket: tokens on top, cost below
+     *              (each scaled to its own axis, so both stay visible)
+     *   'curves' — two smooth curves (Catmull-Rom -> cubic Bezier)
+     *   'mixed'  — stacked tokens bars + cost curve
      *
-     * Overlap of the two lines is possible by construction when both normalise
-     * to the same shape; the dashed stroke and the hover readout keep them
-     * distinguishable.
+     * Two curves normalised to their own axes often end up with almost the
+     * same slope. The simplest honest fix is a constant vertical offset on the
+     * secondary series: primary is drawn as y = f(x), secondary as y = f(x) + C
+     * (C in viewBox units), so the two can never coincide exactly.
      */
     function Chart({ view, texts, mode }) {
       const buckets = useMemo(() => view?.buckets ?? [], [view])
@@ -301,46 +299,74 @@ window.__ModuleLoader__.load({
       const columns = { gridTemplateColumns: `repeat(${Math.max(count, 1)}, minmax(0, 1fr))` }
       const last = Math.max(count - 1, 1)
       const xOf = (index) => (count <= 1 ? 0 : (index / last) * 100)
-      const yOf = (value, max) => (max <= 0 ? 96 : 96 - (value / max) * 92)
-      const pointsOf = (pick, max) =>
-        buckets.map((bucket, index) => `${xOf(index).toFixed(2)},${yOf(pick(bucket), max).toFixed(2)}`).join(' ')
-      const midCost = maxCost / 2
+      // Curve offset: constant, in viewBox units (0..100), so the secondary
+      // series sits strictly below the primary one.
+      const COST_OFFSET = 6
+      // SVG y grows downward, so "+C" means adding to y: the secondary curve is
+      // drawn strictly BELOW the primary one instead of on top of it.
+      const yOf = (value, max, offset) => {
+        // 80 units of range + 6 of offset fits inside the 0..100 viewBox with
+        // headroom, so the offset stays exactly C at both ends.
+        const base = max <= 0 ? 90 : 90 - (value / max) * 80
+        return base + (offset ?? 0)
+      }
 
-      const bars = h(
-        'div',
-        { className: 'dsh-us-cols', style: columns },
-        buckets.map((bucket, index) => {
-          const tokenPx = maxTokens === 0 ? 0 : Math.round((bucket.tokens / maxTokens) * 96)
-          const costPx = maxCost === 0 ? 0 : Math.round((bucket.cost / maxCost) * 96)
-          return h(
-            'div',
-            { className: 'dsh-us-col', key: `bar-${bucket.start}-${index}` },
-            h('div', {
-              className: 'dsh-us-bar dsh-us-bar-tokens',
-              style: { height: bucket.tokens === 0 ? 0 : `${Math.max(tokenPx, 2)}px`, width: mode === 'bars' ? '48%' : '100%' },
-            }),
-            mode === 'bars'
-              ? h('div', {
-                  className: 'dsh-us-bar dsh-us-bar-cost',
-                  style: { height: bucket.cost === 0 ? 0 : `${Math.max(costPx, 2)}px`, width: '48%' },
-                })
-              : null,
-          )
-        }),
-      )
+      /** Catmull-Rom through the points, emitted as cubic Bezier segments. */
+      const smoothPathOf = (pick, max, offset) => {
+        const points = buckets.map((bucket, index) => ({ x: xOf(index), y: yOf(pick(bucket), max, offset) }))
+        if (points.length === 0) return ''
+        if (points.length === 1) return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`
+        let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`
+        for (let i = 0; i < points.length - 1; i += 1) {
+          const p0 = points[i - 1] ?? points[i]
+          const p1 = points[i]
+          const p2 = points[i + 1]
+          const p3 = points[i + 2] ?? points[i + 1]
+          const c1x = p1.x + (p2.x - p0.x) / 6
+          const c1y = p1.y + (p2.y - p0.y) / 6
+          const c2x = p2.x - (p3.x - p1.x) / 6
+          const c2y = p2.y - (p3.y - p1.y) / 6
+          d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`
+        }
+        return d
+      }
 
-      const lines = h(
+      const stackedBars = (withCost) =>
+        h(
+          'div',
+          { className: 'dsh-us-cols', style: columns },
+          buckets.map((bucket, index) => {
+            const tokenPx = maxTokens === 0 ? 0 : Math.round((bucket.tokens / maxTokens) * 74)
+            const costPx = maxCost === 0 ? 0 : Math.round((bucket.cost / maxCost) * 20)
+            return h(
+              'div',
+              { className: 'dsh-us-col', key: `bar-${bucket.start}-${index}` },
+              h('div', {
+                className: 'dsh-us-bar dsh-us-bar-tokens',
+                style: { height: bucket.tokens === 0 ? 0 : `${Math.max(tokenPx, 2)}px` },
+              }),
+              withCost
+                ? h('div', {
+                    className: 'dsh-us-bar dsh-us-bar-cost',
+                    style: { height: bucket.cost === 0 ? 0 : `${Math.max(costPx, 2)}px` },
+                  })
+                : null,
+            )
+          }),
+        )
+
+      const curves = h(
         'svg',
         { className: 'dsh-us-overlay', viewBox: '0 0 100 100', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'trend' },
-        mode === 'lines'
-          ? h('polyline', {
+        mode === 'curves'
+          ? h('path', {
               className: 'dsh-us-line dsh-us-line-tokens',
-              points: pointsOf((bucket) => bucket.tokens, maxTokens),
+              d: smoothPathOf((bucket) => bucket.tokens, maxTokens, 0),
             })
           : null,
-        h('polyline', {
+        h('path', {
           className: 'dsh-us-line dsh-us-line-cost',
-          points: pointsOf((bucket) => bucket.cost, maxCost),
+          d: smoothPathOf((bucket) => bucket.cost, maxCost, COST_OFFSET),
         }),
       )
 
@@ -391,8 +417,8 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-us-gridline', style: { top: 0 } }),
             h('div', { className: 'dsh-us-gridline', style: { top: '50%' } }),
             h('div', { className: 'dsh-us-gridline', style: { bottom: 0 } }),
-            mode === 'lines' ? null : bars,
-            mode === 'bars' ? null : lines,
+            mode === 'curves' ? null : stackedBars(mode === 'bars'),
+            mode === 'bars' ? null : curves,
             guide,
             tooltip,
           ),
@@ -400,7 +426,7 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dsh-us-yaxis dsh-us-yaxis-right' },
             h('span', null, formatMoney(maxCost, texts)),
-            h('span', null, formatMoney(midCost, texts)),
+            h('span', null, formatMoney(maxCost / 2, texts)),
             h('span', null, '¥0'),
           ),
         ),
@@ -634,8 +660,8 @@ window.__ModuleLoader__.load({
                             {
                               type: 'button',
                               className: 'dsh-us-mode-btn',
-                              'data-active': chartMode === 'lines' ? 'true' : 'false',
-                              onClick: () => setChartMode('lines'),
+                              'data-active': chartMode === 'curves' ? 'true' : 'false',
+                              onClick: () => setChartMode('curves'),
                             },
                             texts.chartLine,
                           ),
