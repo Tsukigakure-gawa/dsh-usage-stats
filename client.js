@@ -47,7 +47,6 @@ window.__ModuleLoader__.load({
         unitTitle: 'CNY per 1M tokens: input / output',
         chartBars: 'Bars',
         chartLine: 'Curves',
-        chartMixed: 'Mixed',
         showAllModels: 'Show all models',
         showRecentOnly: 'Recent only',
         recentOnlyNote: 'Models idle for 7+ days are hidden:',
@@ -94,7 +93,6 @@ window.__ModuleLoader__.load({
         unitTitle: '每百万 token 单价：输入 / 输出',
         chartBars: '柱状',
         chartLine: '曲线',
-        chartMixed: '混合',
         showAllModels: '显示全部模型',
         showRecentOnly: '只看近 7 天',
         recentOnlyNote: '7 天内未使用的模型已隐藏：',
@@ -281,8 +279,8 @@ window.__ModuleLoader__.load({
      * `mode`:
      *   'bars'   — stacked bars per bucket: tokens on top, cost below
      *              (each scaled to its own axis, so both stay visible)
-     *   'curves' — two smooth curves (Catmull-Rom -> cubic Bezier)
-     *   'mixed'  — stacked tokens bars + cost curve
+     *   'curves' — two smooth curves (Catmull-Rom -> cubic Bezier), the
+     *              secondary one shifted down by a constant C
      *
      * Two curves normalised to their own axes often end up with almost the
      * same slope. The simplest honest fix is a constant vertical offset on the
@@ -297,15 +295,16 @@ window.__ModuleLoader__.load({
       const maxCost = buckets.reduce((max, bucket) => Math.max(max, bucket.cost), 0)
       const stride = Math.max(1, Math.ceil(count / 8))
       const columns = { gridTemplateColumns: `repeat(${Math.max(count, 1)}, minmax(0, 1fr))` }
+      const effectiveMode = mode === 'curves' ? 'curves' : 'bars'
       const last = Math.max(count - 1, 1)
       const xOf = (index) => (count <= 1 ? 0 : (index / last) * 100)
       // Curve offset: constant, in viewBox units (0..100), so the secondary
       // series sits strictly below the primary one.
-      const COST_OFFSET = 6
+      const COST_OFFSET = 8
       // SVG y grows downward, so "+C" means adding to y: the secondary curve is
       // drawn strictly BELOW the primary one instead of on top of it.
       const yOf = (value, max, offset) => {
-        // 80 units of range + 6 of offset fits inside the 0..100 viewBox with
+        // 80 units of range + 8 of offset fits inside the 0..100 viewBox with
         // headroom, so the offset stays exactly C at both ends.
         const base = max <= 0 ? 90 : 90 - (value / max) * 80
         return base + (offset ?? 0)
@@ -358,7 +357,7 @@ window.__ModuleLoader__.load({
       const curves = h(
         'svg',
         { className: 'dsh-us-overlay', viewBox: '0 0 100 100', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'trend' },
-        mode === 'curves'
+        effectiveMode === 'curves'
           ? h('path', {
               className: 'dsh-us-line dsh-us-line-tokens',
               d: smoothPathOf((bucket) => bucket.tokens, maxTokens, 0),
@@ -417,8 +416,8 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-us-gridline', style: { top: 0 } }),
             h('div', { className: 'dsh-us-gridline', style: { top: '50%' } }),
             h('div', { className: 'dsh-us-gridline', style: { bottom: 0 } }),
-            mode === 'curves' ? null : stackedBars(mode === 'bars'),
-            mode === 'bars' ? null : curves,
+            effectiveMode === 'curves' ? null : stackedBars(true),
+            effectiveMode === 'bars' ? null : curves,
             guide,
             tooltip,
           ),
@@ -665,16 +664,7 @@ window.__ModuleLoader__.load({
                             },
                             texts.chartLine,
                           ),
-                          h(
-                            'button',
-                            {
-                              type: 'button',
-                              className: 'dsh-us-mode-btn',
-                              'data-active': chartMode === 'mixed' ? 'true' : 'false',
-                              onClick: () => setChartMode('mixed'),
-                            },
-                            texts.chartMixed,
-                          ),
+
                         ),
                       ),
                     ),
