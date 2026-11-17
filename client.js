@@ -234,12 +234,18 @@ window.__ModuleLoader__.load({
 .dsh-us-legend { display:flex; gap:12px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; }
 .dsh-us-legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:1px; }
 .dsh-us-chart { display:flex; flex-direction:column; }
-.dsh-us-col { display:flex; flex-direction:column; justify-content:flex-end; gap:2px; height:100%; min-width:0; }
+.dsh-us-col { display:flex; align-items:flex-end; justify-content:center; gap:1px; height:100%; min-width:0; }
 .dsh-us-col:hover .dsh-us-bar { filter:brightness(1.12); }
-.dsh-us-bar { width:100%; border-radius:2px 2px 1px 1px; min-height:0; }
+.dsh-us-bar { border-radius:2px 2px 1px 1px; min-height:0; }
 .dsh-us-bar-tokens { background:var(--dsw-alias-brand-primary,#3b82f6); }
 .dsh-us-bar-cost { background:var(--dsw-alias-state-success-primary,#10b981); opacity:.85; }
-.dsh-us-axis { display:grid; gap:2px; margin-top:6px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:10px; font-variant-numeric:tabular-nums; }
+.dsh-us-dual { display:grid; grid-template-columns:46px minmax(0,1fr) 58px; gap:6px; align-items:stretch; }
+.dsh-us-yaxis { display:flex; flex-direction:column; justify-content:space-between; height:104px; font-size:9px; line-height:1; color:var(--dsw-alias-label-secondary,#6b7280); font-variant-numeric:tabular-nums; }
+.dsh-us-yaxis-left { text-align:right; padding-right:2px; }
+.dsh-us-yaxis-right { text-align:left; padding-left:2px; }
+.dsh-us-plot { position:relative; height:104px; }
+.dsh-us-gridline { position:absolute; left:0; right:0; border-top:1px dashed var(--dsw-alias-border-l1,rgba(0,0,0,.08)); }
+.dsh-us-cols { display:grid; gap:2px; align-items:end; height:104px; }.dsh-us-axis { display:grid; gap:2px; margin-top:6px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:10px; font-variant-numeric:tabular-nums; }
 .dsh-us-axis span { text-align:center; overflow:hidden; white-space:nowrap; }
 .dsh-us-models { display:flex; flex-direction:column; gap:6px; }
 .dsh-us-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:10px; align-items:baseline; padding:4px 0; border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06)); font-variant-numeric:tabular-nums; }
@@ -250,7 +256,7 @@ window.__ModuleLoader__.load({
 .dsh-us-note { color:var(--dsw-alias-label-secondary,#6b7280); font-size:11px; }
 .dsh-us-line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; stroke-linecap:round; }
 .dsh-us-line-tokens { stroke:var(--dsw-alias-brand-primary,#3b82f6); }
-.dsh-us-line-cost { stroke:var(--dsw-alias-state-success-primary,#10b981); opacity:.85; }
+.dsh-us-line-cost { stroke:var(--dsw-alias-state-success-primary,#10b981); opacity:.9; stroke-dasharray:4 3; }
 .dsh-us-mode { display:inline-flex; gap:2px; padding:2px; border-radius:8px; background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.04)); }
 .dsh-us-mode-btn { appearance:none; border:0; background:transparent; color:var(--dsw-alias-label-secondary,#6b7280); font:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; }
 .dsh-us-mode-btn[data-active="true"] { background:var(--dsw-alias-bg-base,#fff); color:var(--dsw-alias-label-primary,#111); box-shadow:0 1px 2px rgba(0,0,0,.10); font-weight:600; }
@@ -262,31 +268,28 @@ window.__ModuleLoader__.load({
 .dsh-us-tip-end { transform:translateX(-100%); }
 .dsh-us-tip-head { font-weight:600; margin-bottom:2px; }
 .dsh-us-tip-sub { color:var(--dsw-alias-label-secondary,#6b7280); }
-.dsh-us-cols { display:grid; gap:2px; align-items:end; height:46px; }
-.dsh-us-lanes { position:relative; display:flex; flex-direction:column; gap:10px; }
-.dsh-us-lane { display:grid; grid-template-columns:38px minmax(0,1fr) 52px; gap:8px; align-items:stretch; }
-.dsh-us-lane-title { font-size:10px; color:var(--dsw-alias-label-secondary,#6b7280); text-align:right; align-self:center; font-variant-numeric:tabular-nums; }
-.dsh-us-lane-plot { position:relative; height:46px; }
-.dsh-us-lane-axis { display:flex; flex-direction:column; justify-content:space-between; height:46px; font-size:9px; color:var(--dsw-alias-label-secondary,#6b7280); font-variant-numeric:tabular-nums; }
 .dsh-us-state { border:1px dashed var(--dsw-alias-border-l1,rgba(0,0,0,.12)); border-radius:12px; padding:22px 16px; text-align:center; color:var(--dsw-alias-label-secondary,#6b7280); font-size:12px; }
 .dsh-us-error { color:var(--dsw-alias-state-error-primary,#dc2626); }
 `
 
     /**
-     * Time-series chart with TWO adaptive Y axes.
+     * Dual-axis time series: ONE plot area, two Y axes.
      *
-     * Tokens and CNY differ by orders of magnitude, so they get their own lane
-     * instead of sharing one axis: the top lane is tokens, the bottom lane is
-     * money, each scaled to its own maximum (labels at the right edge). Lanes
-     * never overlap, so "the line went up" is never ambiguous.
+     * - Left axis (primary)  = tokens, adaptive to maxTokens
+     * - Right axis (secondary) = CNY, adaptive to maxCost
+     *
+     * That is the standard dual-axis shape (one shared baseline, two scales);
+     * putting the two series in separate panels would hide the very
+     * correlation the chart exists to show.
      *
      * `mode`:
-     *   'bars'  — both lanes as bars
-     *   'lines' — both lanes as polylines
-     *   'mixed' — tokens bars on top, cost line below
+     *   'bars'  — tokens bars (left axis) + cost bars (right axis), side by side
+     *   'lines' — tokens solid line (left) + cost dashed line (right)
+     *   'mixed' — tokens bars (left) + cost dashed line (right)  ← the usual combo
      *
-     * Hovering shows one tooltip with both series for that bucket plus a guide
-     * line spanning both lanes.
+     * Overlap of the two lines is possible by construction when both normalise
+     * to the same shape; the dashed stroke and the hover readout keep them
+     * distinguishable.
      */
     function Chart({ view, texts, mode }) {
       const buckets = useMemo(() => view?.buckets ?? [], [view])
@@ -301,43 +304,45 @@ window.__ModuleLoader__.load({
       const yOf = (value, max) => (max <= 0 ? 96 : 96 - (value / max) * 92)
       const pointsOf = (pick, max) =>
         buckets.map((bucket, index) => `${xOf(index).toFixed(2)},${yOf(pick(bucket), max).toFixed(2)}`).join(' ')
+      const midCost = maxCost / 2
 
-      const barsOf = (pick, max, barClass) =>
-        h(
-          'div',
-          { className: 'dsh-us-cols', style: columns },
-          buckets.map((bucket, index) => {
-            const value = pick(bucket)
-            const px = max === 0 ? 0 : Math.round((value / max) * 42)
-            return h(
-              'div',
-              { className: 'dsh-us-col', key: `${barClass}-${bucket.start}-${index}` },
-              h('div', {
-                className: `dsh-us-bar ${barClass}`,
-                style: { height: value === 0 ? 0 : `${Math.max(px, 2)}px` },
-              }),
-            )
-          }),
-        )
+      const bars = h(
+        'div',
+        { className: 'dsh-us-cols', style: columns },
+        buckets.map((bucket, index) => {
+          const tokenPx = maxTokens === 0 ? 0 : Math.round((bucket.tokens / maxTokens) * 96)
+          const costPx = maxCost === 0 ? 0 : Math.round((bucket.cost / maxCost) * 96)
+          return h(
+            'div',
+            { className: 'dsh-us-col', key: `bar-${bucket.start}-${index}` },
+            h('div', {
+              className: 'dsh-us-bar dsh-us-bar-tokens',
+              style: { height: bucket.tokens === 0 ? 0 : `${Math.max(tokenPx, 2)}px`, width: mode === 'bars' ? '48%' : '100%' },
+            }),
+            mode === 'bars'
+              ? h('div', {
+                  className: 'dsh-us-bar dsh-us-bar-cost',
+                  style: { height: bucket.cost === 0 ? 0 : `${Math.max(costPx, 2)}px`, width: '48%' },
+                })
+              : null,
+          )
+        }),
+      )
 
-      const lineOf = (pick, max, lineClass) =>
-        h(
-          'svg',
-          { className: 'dsh-us-overlay', viewBox: '0 0 100 100', preserveAspectRatio: 'none', role: 'img', 'aria-label': lineClass },
-          h('polyline', { className: `dsh-us-line ${lineClass}`, points: pointsOf(pick, max) }),
-        )
-
-      const tokensBody = mode === 'lines' ? lineOf((b) => b.tokens, maxTokens, 'dsh-us-line-tokens') : barsOf((b) => b.tokens, maxTokens, 'dsh-us-bar-tokens')
-      const costBody = mode === 'bars' ? barsOf((b) => b.cost, maxCost, 'dsh-us-bar-cost') : lineOf((b) => b.cost, maxCost, 'dsh-us-line-cost')
-
-      const lane = (title, body, top, bottom) =>
-        h(
-          'div',
-          { className: 'dsh-us-lane' },
-          h('div', { className: 'dsh-us-lane-title' }, title),
-          h('div', { className: 'dsh-us-lane-plot' }, body),
-          h('div', { className: 'dsh-us-lane-axis' }, h('span', null, top), h('span', null, bottom)),
-        )
+      const lines = h(
+        'svg',
+        { className: 'dsh-us-overlay', viewBox: '0 0 100 100', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'trend' },
+        mode === 'lines'
+          ? h('polyline', {
+              className: 'dsh-us-line dsh-us-line-tokens',
+              points: pointsOf((bucket) => bucket.tokens, maxTokens),
+            })
+          : null,
+        h('polyline', {
+          className: 'dsh-us-line dsh-us-line-cost',
+          points: pointsOf((bucket) => bucket.cost, maxCost),
+        }),
+      )
 
       const onMove = (event) => {
         const rect = event.currentTarget.getBoundingClientRect()
@@ -353,10 +358,7 @@ window.__ModuleLoader__.load({
         const align = hover < count * 0.2 ? 'start' : hover > count * 0.8 ? 'end' : 'center'
         tooltip = h(
           'div',
-          {
-            className: `dsh-us-tip dsh-us-tip-${align}`,
-            style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` },
-          },
+          { className: `dsh-us-tip dsh-us-tip-${align}`, style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` } },
           h('div', { className: 'dsh-us-tip-head' }, bucketLabel(bucket.start, view.kind)),
           h('div', null, `${texts.totalTokens}: ${formatTokens(bucket.tokens)}`),
           h('div', null, `${texts.totalCost}: ${formatMoney(bucket.cost, texts)}`),
@@ -367,10 +369,7 @@ window.__ModuleLoader__.load({
             `${formatTokens(bucket.input)} in · ${formatTokens(bucket.output)} out · ${texts.cacheRead} ${formatTokens(bucket.cacheRead)}`,
           ),
         )
-        guide = h('div', {
-          className: 'dsh-us-guide',
-          style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` },
-        })
+        guide = h('div', { className: 'dsh-us-guide', style: { left: `${((hover + 0.5) / Math.max(count, 1)) * 100}%` } })
       }
 
       return h(
@@ -378,11 +377,32 @@ window.__ModuleLoader__.load({
         { className: 'dsh-us-chart' },
         h(
           'div',
-          { className: 'dsh-us-lanes', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
-          lane('tokens', tokensBody, formatTokens(maxTokens), '0'),
-          lane('¥', costBody, formatMoney(maxCost, texts), '0'),
-          guide,
-          tooltip,
+          { className: 'dsh-us-dual' },
+          h(
+            'div',
+            { className: 'dsh-us-yaxis dsh-us-yaxis-left' },
+            h('span', null, formatTokens(maxTokens)),
+            h('span', null, formatTokens(maxTokens / 2)),
+            h('span', null, '0'),
+          ),
+          h(
+            'div',
+            { className: 'dsh-us-plot', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
+            h('div', { className: 'dsh-us-gridline', style: { top: 0 } }),
+            h('div', { className: 'dsh-us-gridline', style: { top: '50%' } }),
+            h('div', { className: 'dsh-us-gridline', style: { bottom: 0 } }),
+            mode === 'lines' ? null : bars,
+            mode === 'bars' ? null : lines,
+            guide,
+            tooltip,
+          ),
+          h(
+            'div',
+            { className: 'dsh-us-yaxis dsh-us-yaxis-right' },
+            h('span', null, formatMoney(maxCost, texts)),
+            h('span', null, formatMoney(midCost, texts)),
+            h('span', null, '¥0'),
+          ),
         ),
         h(
           'div',
