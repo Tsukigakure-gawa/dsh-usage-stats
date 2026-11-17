@@ -189,6 +189,17 @@ window.__ModuleLoader__.load({
       return `${date.getMonth() + 1}/${date.getDate()}`
     }
 
+    /**
+     * Compact x-axis tick text. Kept short on purpose: a 30-bucket day view
+     * leaves ~25px per column, so full "2026-11-13" would be clipped.
+     */
+    function axisLabelOf(start, kind) {
+      const date = new Date(start)
+      if (kind === 'hour') return `${String(date.getHours()).padStart(2, '0')}:00`
+      if (kind === 'month') return `${String(date.getFullYear()).slice(2)}/${date.getMonth() + 1}`
+      return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+
     function bucketTitle(bucket, kind, texts) {
       const start = new Date(bucket.start)
       const end = new Date(bucket.end)
@@ -243,8 +254,12 @@ window.__ModuleLoader__.load({
 .dsh-us-yaxis-right { text-align:left; padding-left:2px; }
 .dsh-us-plot { position:relative; height:104px; }
 .dsh-us-gridline { position:absolute; left:0; right:0; border-top:1px dashed var(--dsw-alias-border-l1,rgba(0,0,0,.08)); }
-.dsh-us-cols { display:grid; gap:2px; align-items:end; height:104px; }.dsh-us-axis { display:grid; gap:2px; margin-top:6px; color:var(--dsw-alias-label-secondary,#6b7280); font-size:10px; font-variant-numeric:tabular-nums; }
-.dsh-us-axis span { text-align:center; overflow:hidden; white-space:nowrap; }
+.dsh-us-cols { display:grid; gap:2px; align-items:end; height:104px; }
+.dsh-us-plotcol { display:flex; flex-direction:column; min-width:0; }
+.dsh-us-xaxis { position:relative; height:14px; margin-top:5px; font-size:10px; color:var(--dsw-alias-label-secondary,#6b7280); font-variant-numeric:tabular-nums; }
+.dsh-us-xtick { position:absolute; top:0; transform:translateX(-50%); white-space:nowrap; }
+.dsh-us-xtick.is-first { transform:translateX(0); }
+.dsh-us-xtick.is-last { transform:translateX(-100%); }
 .dsh-us-models { display:flex; flex-direction:column; gap:6px; }
 .dsh-us-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:10px; align-items:baseline; padding:4px 0; border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06)); font-variant-numeric:tabular-nums; }
 .dsh-us-row:first-child { border-top:0; }
@@ -294,6 +309,8 @@ window.__ModuleLoader__.load({
       const maxTokens = buckets.reduce((max, bucket) => Math.max(max, bucket.tokens), 0)
       const maxCost = buckets.reduce((max, bucket) => Math.max(max, bucket.cost), 0)
       const stride = Math.max(1, Math.ceil(count / 8))
+      // 让刻度序列以最后一桶收尾：最新日期永远可见，也不会和倒数第二个挤在一起
+      const firstTick = count > 1 ? (count - 1) % stride : 0
       const columns = { gridTemplateColumns: `repeat(${Math.max(count, 1)}, minmax(0, 1fr))` }
       const effectiveMode = mode === 'curves' ? 'curves' : 'bars'
       const last = Math.max(count - 1, 1)
@@ -412,14 +429,33 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { className: 'dsh-us-plot', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
-            h('div', { className: 'dsh-us-gridline', style: { top: 0 } }),
-            h('div', { className: 'dsh-us-gridline', style: { top: '50%' } }),
-            h('div', { className: 'dsh-us-gridline', style: { bottom: 0 } }),
-            effectiveMode === 'curves' ? null : stackedBars(true),
-            effectiveMode === 'bars' ? null : curves,
-            guide,
-            tooltip,
+            { className: 'dsh-us-plotcol' },
+            h(
+              'div',
+              { className: 'dsh-us-plot', onMouseMove: onMove, onMouseLeave: () => setHover(null) },
+              h('div', { className: 'dsh-us-gridline', style: { top: 0 } }),
+              h('div', { className: 'dsh-us-gridline', style: { top: '50%' } }),
+              h('div', { className: 'dsh-us-gridline', style: { bottom: 0 } }),
+              effectiveMode === 'curves' ? null : stackedBars(true),
+              effectiveMode === 'bars' ? null : curves,
+              guide,
+              tooltip,
+            ),
+            h(
+              'div',
+              { className: 'dsh-us-xaxis' },
+              buckets.map((bucket, index) => {
+                if (index < firstTick || (index - firstTick) % stride !== 0) return null
+                const isFirst = index === firstTick
+                const isLast = index === count - 1
+                const cls = `dsh-us-xtick${isFirst ? ' is-first' : ''}${isLast ? ' is-last' : ''}`
+                return h(
+                  'span',
+                  { key: `tick-${bucket.start}-${index}`, className: cls, style: { left: `${((index + 0.5) / Math.max(count, 1)) * 100}%` } },
+                  axisLabelOf(bucket.start, view.kind),
+                )
+              }),
+            ),
           ),
           h(
             'div',
@@ -429,17 +465,7 @@ window.__ModuleLoader__.load({
             h('span', null, '¥0'),
           ),
         ),
-        h(
-          'div',
-          { className: 'dsh-us-axis', style: columns },
-          buckets.map((bucket, index) =>
-            h(
-              'span',
-              { key: `${bucket.start}-label-${index}` },
-              index % stride === 0 || index === count - 1 ? bucketLabel(bucket.start, view.kind) : '',
-            ),
-          ),
-        ),
+
       )
     }
     /**
