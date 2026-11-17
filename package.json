@@ -1,0 +1,29 @@
+{
+  "name": "dsh-usage-stats",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Token and estimated CNY spend by time period, as a Settings section next to Account & balance.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "locale/*.json",
+    "icon.svg",
+    "scripts/verify.mjs"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Usage statistics",
+    "description": "Token and estimated CNY spend by hour, day, or month, folded from every session log and shown in Settings next to Account & balance."
+  }
+}
