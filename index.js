@@ -28,18 +28,173 @@ const PER_UNIT = 1_000_000
 const MAX_TZ_MINUTES = 14 * 60
 
 /**
- * Sample rates used when the row's `config.pricing` is absent (CNY / 1M tokens).
+ * Price resolution has four layers, highest priority first:
  *
- * These are PLACEHOLDERS, not list prices and not anyone's real bill. Derive
- * your own from an invoice (`amount / tokens * 1e6`) and put them in
- * `config.pricing`; `*` is the catch-all bucket.
+ *   L0 override  — the row's `config.pricing` (exact key, then `provider/*`, then `*`)
+ *   L1 official  — built-in table matched against a NORMALIZED model name, so a
+ *                  relay that renames the provider (or appends a date/size tag)
+ *                  still resolves to the right family
+ *   L2 gateway   — prices the relay itself publishes (OpenRouter `/v1/models`,
+ *                  one-api/new-api `/api/pricing`), fetched and cached
+ *   L3 none      — tokens only; the page lists the model as unpriced
+ *
+ * Nothing here is authoritative: every model carries the source it resolved
+ * from, and the page shows it, so an estimate is never mistaken for a bill.
  */
-const DEFAULT_PRICING = {
-  'example-provider/*': { rate: 1.0 },
-  '*': { rate: 1.0 },
+const PRICE_SOURCE = {
+  override: 'override',
+  official: 'official',
+  gateway: 'gateway',
+  none: 'none',
 }
 
-const DEFAULT_BASIS = '示例单价（请在 config.pricing 里换成自己账单反推的值）'
+/** CNY per 1M tokens for the built-in table is configurable via `usdToCny`. */
+const DEFAULT_USD_TO_CNY = 7.2
+
+/** No overrides by default: L1/L2 do the work, L0 only when the caller sets it. */
+const DEFAULT_PRICING = {}
+
+const DEFAULT_BASIS = '自动匹配（L1 官方参考价 / L2 网关自报价），可用 config.pricing 覆盖'
+
+/**
+ * Reference list prices in USD per 1M tokens, converted at `usdToCny` unless the
+ * row overrides them. Clearly an approximation: list prices change, and this
+ * table is meant to be replaced by L0/L2 whenever the caller knows better.
+ *
+ * `models` is a pattern list tested against the canonical model name.
+ */
+const OFFICIAL_TABLE = [
+  { models: [/^deepseek-(chat|v3)/], usd: { in: 0.27, out: 1.10 } },
+  { models: [/^deepseek-reasoner|^deepseek-r1/], usd: { in: 0.55, out: 2.19 } },
+  { models: [/claude.*opus/], usd: { in: 15, out: 75 } },
+  { models: [/claude.*sonnet/], usd: { in: 3, out: 15 } },
+  { models: [/claude.*haiku/], usd: { in: 0.8, out: 4 } },
+  { models: [/^gpt-4o-mini/], usd: { in: 0.15, out: 0.6 } },
+  { models: [/^gpt-4o/], usd: { in: 2.5, out: 10 } },
+  { models: [/^gpt-4\.1-mini/], usd: { in: 0.4, out: 1.6 } },
+  { models: [/^gpt-4\.1/], usd: { in: 2, out: 8 } },
+  { models: [/^o[34](-mini)?$/], usd: { in: 1.1, out: 4.4 } },
+  { models: [/gemini.*flash/], usd: { in: 0.3, out: 2.5 } },
+  { models: [/gemini.*pro/], usd: { in: 1.25, out: 10 } },
+]
+
+/**
+ * Canonical model name: drop the provider prefix, the vendor prefix, date
+ * stamps, `[128k]`-style tags and `-latest`/`-preview`/`-free` suffixes.
+ *
+ *   'fluxtoken/claude-3-5-sonnet-20241022' -> 'claude-3-5-sonnet'
+ *   'anyproxy/openai/gpt-4o-mini[128k]'    -> 'gpt-4o-mini'
+ */
+function canonicalModel(key) {
+  let name = String(key ?? '').toLowerCase()
+  const slash = name.indexOf('/')
+  if (slash >= 0) name = name.slice(slash + 1)
+  name = name.replace(/^[a-z0-9_.-]+\//, '')
+  name = name.replace(/[-_](19|20)\d{6}$/, '')
+  name = name.replace(/[-_](19|20)\d{2}[-_]\d{2}[-_]\d{2}$/, '')
+  name = name.replace(/\[[^\]]*\]$/, '')
+  name = name.replace(/[-_](latest|preview|beta|free|v\d+)$/, '')
+  name = name.replace(/_/g, '-')
+  return name
+}
+
+/** `{in, out}` USD -> a `{cacheMiss, cacheHit, output}` CNY rule. */
+function fromUsd(usd, usdToCny) {
+  const input = num(usd?.in) * usdToCny
+  const output = num(usd?.out) * usdToCny
+  if (input <= 0 && output <= 0) return undefined
+  // Cache reads are typically a quarter of the input price; the exact ratio is
+  // per provider, so this is a documented approximation, not a measurement.
+  return { cacheMiss: input, cacheHit: input * 0.25, output: output > 0 ? output : input }
+}
+
+/** L1: first matching entry of the built-in table, or undefined. */
+function officialPriceOf(canonical, usdToCny) {
+  for (const entry of OFFICIAL_TABLE) {
+    if (entry.models.some((pattern) => pattern.test(canonical))) return fromUsd(entry.usd, usdToCny)
+  }
+  return undefined
+}
+
+/**
+ * one-api / new-api quota math: `quota = tokens * model_ratio * group_ratio`,
+ * and USD 1 = 500000 quota, so USD per 1M tokens = ratio * group * 2.
+ * `completionRatio` (when the site exposes it) splits input and output price.
+ */
+function fromOneApiRatio(ratio, groupRatio, usdToCny, completionRatio) {
+  const usdIn = num(ratio) * (num(groupRatio) || 1) * 2
+  if (usdIn <= 0) return undefined
+  const usdOut = num(completionRatio) > 0 ? usdIn * num(completionRatio) : usdIn
+  return fromUsd({ in: usdIn, out: usdOut }, usdToCny)
+}
+
+/**
+ * Fetch one gateway's published prices. Two shapes are supported:
+ *
+ * - `openrouter`: `GET {baseUrl}/v1/models` -> `data[].pricing.{prompt,completion}`
+ *   in USD per token.
+ * - `oneapi`: `GET {baseUrl}/api/pricing` (new-api) or `/api/models` (one-api)
+ *   -> `model_ratio` / `completion_ratio` / `group_ratio`, quota math above.
+ *
+ * Returns a `Map<canonicalModel, rule>` (plus `'*'` for a provider-wide rate),
+ * or an empty map when the site answers with something unexpected. Never throws:
+ * a relay that hides its prices must only cost us the L2 tier.
+ */
+async function fetchGatewayPrices(gateway, usdToCny, fetchImpl) {
+  const out = new Map()
+  const base = String(gateway.baseUrl ?? '').replace(/\/+$/, '')
+  if (base === '' || typeof fetchImpl !== 'function') return out
+  const headers = { accept: 'application/json' }
+  if (typeof gateway.apiKey === 'string' && gateway.apiKey !== '') headers.authorization = `Bearer ${gateway.apiKey}`
+
+  const getJson = async (path) => {
+    const response = await fetchImpl(`${base}${path}`, {
+      headers,
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(8000) : undefined,
+    })
+    if (!response?.ok) return undefined
+    return response.json()
+  }
+
+  try {
+    if (gateway.kind === 'openrouter') {
+      const body = await getJson('/v1/models')
+      for (const item of body?.data ?? []) {
+        const prompt = Number(item?.pricing?.prompt)
+        const completion = Number(item?.pricing?.completion)
+        if (!Number.isFinite(prompt) || prompt <= 0) continue
+        const usd = { in: prompt * 1e6, out: (Number.isFinite(completion) && completion > 0 ? completion : prompt) * 1e6 }
+        const rule = fromUsd(usd, usdToCny)
+        if (rule) out.set(canonicalModel(String(item?.id ?? '')), rule)
+      }
+      return out
+    }
+
+    // one-api family: try /api/pricing first, then /api/models
+    const pricing = await getJson('/api/pricing')
+    const rows = Array.isArray(pricing) ? pricing : Array.isArray(pricing?.data) ? pricing.data : []
+    for (const item of rows) {
+      const name = String(item?.model_name ?? item?.model ?? '')
+      const ratio = num(item?.model_ratio) > 0 ? item.model_ratio : item?.quota_type === 0 ? 1 : undefined
+      const rule = fromOneApiRatio(ratio, item?.group_ratio, usdToCny, item?.completion_ratio)
+      if (name !== '' && rule) out.set(canonicalModel(name), rule)
+    }
+    if (out.size > 0) return out
+
+    const models = await getJson('/api/models')
+    const list = Array.isArray(models) ? models : Array.isArray(models?.data) ? models.data : []
+    for (const item of list) {
+      const name = String(item?.model_name ?? item?.id ?? '')
+      const rule = fromOneApiRatio(item?.model_ratio, item?.group_ratio ?? 1, usdToCny, item?.completion_ratio)
+      if (name !== '' && rule) out.set(canonicalModel(name), rule)
+    }
+  } catch {
+    // offline / wrong shape / blocked: L2 simply yields nothing
+  }
+  return out
+}
+
+
 
 /** One numeric token field, tolerating absent or malformed values. */
 function num(value) {
@@ -95,7 +250,37 @@ function resolvePrice(pricing, key) {
 }
 
 /**
- * Estimated CNY for one row, or `null` when no rate rule matches its model.
+ * Full four-layer resolution for one row. `gatewayPrices` is
+ * `Map<providerName, Map<canonicalModel, rule>>` filled by the L2 loader.
+ */
+function resolveRowPrice(row, settings, gatewayPrices) {
+  // L0 — explicit override (exact key, `provider/*`, `*`)
+  const override = resolvePrice(settings.pricing, row.key)
+  if (override !== undefined) return { price: override, source: PRICE_SOURCE.override }
+
+  const canonical = canonicalModel(row.key)
+
+  // L1 — built-in reference table
+  if (settings.autoOfficial) {
+    const official = officialPriceOf(canonical, settings.usdToCny)
+    if (official !== undefined) return { price: official, source: PRICE_SOURCE.official }
+  }
+
+  // L2 — what the gateway itself published
+  const slash = row.key.indexOf('/')
+  const provider = slash > 0 ? row.key.slice(0, slash) : ''
+  const fromGateway = gatewayPrices?.get(provider)
+  if (fromGateway !== undefined) {
+    const hit = fromGateway.get(canonical) ?? fromGateway.get('*')
+    if (hit !== undefined) return { price: hit, source: PRICE_SOURCE.gateway }
+  }
+
+  // L3 — tokens only
+  return { price: undefined, source: PRICE_SOURCE.none }
+}
+
+/**
+ * Estimated CNY for one row, or `null` when no rule matched its model.
  *
  * Two rule shapes are accepted:
  * - `{ rate }` — one blended CNY-per-1M-token price, applied to every token
@@ -194,7 +379,7 @@ function nextMonthStartOf(start, offsetMinutes) {
  * Build the four ranges the page offers. All four come from the same row set,
  * so switching tabs never re-reads a session log.
  */
-function buildViews(rows, pricing, offsetMinutes, now) {
+function buildViews(rows, resolve, offsetMinutes, now) {
   const today = dayStartOf(now, offsetMinutes)
   const hourBuckets = []
   for (let index = 0; index < 24; index += 1) hourBuckets.push(emptyBucket(today + index * HOUR, HOUR))
@@ -223,8 +408,8 @@ function buildViews(rows, pricing, offsetMinutes, now) {
   const unpriced = new Set()
 
   for (const row of rows) {
-    const price = resolvePrice(pricing, row.key)
-    const cost = costOf(price, row)
+    const resolved = resolve(row)
+    const cost = costOf(resolved.price, row)
     if (cost === null) unpriced.add(row.key)
 
     const hourIndex = Math.floor((row.t - today) / HOUR)
@@ -240,7 +425,19 @@ function buildViews(rows, pricing, offsetMinutes, now) {
     const index = allIndex.get(key)
     if (index !== undefined) addTo(allBuckets[index], row, cost)
 
-    const entry = models.get(row.key) ?? { key: row.key, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, priced: cost !== null }
+    const entry = models.get(row.key) ?? {
+      key: row.key,
+      canonical: canonicalModel(row.key),
+      calls: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tokens: 0,
+      cost: 0,
+      priced: cost !== null,
+      priceSource: resolved.source,
+    }
     entry.calls += 1
     entry.input += row.input
     entry.output += row.output
@@ -299,7 +496,21 @@ function normalizeConfig(config) {
   const raw = config !== null && typeof config === 'object' ? config : {}
   const pricing = raw.pricing !== null && typeof raw.pricing === 'object' ? raw.pricing : DEFAULT_PRICING
   const basis = typeof raw.basis === 'string' && raw.basis.trim() !== '' ? raw.basis.trim() : DEFAULT_BASIS
-  return { pricing, basis }
+  const autoOfficial = raw.autoOfficial !== false
+  const usdToCny = Number(raw.usdToCny) > 0 ? Number(raw.usdToCny) : DEFAULT_USD_TO_CNY
+  const gateways = Array.isArray(raw.gateways)
+    ? raw.gateways.filter(
+        (item) =>
+          item !== null &&
+          typeof item === 'object' &&
+          typeof item.provider === 'string' &&
+          item.provider !== '' &&
+          typeof item.baseUrl === 'string' &&
+          item.baseUrl !== '',
+      )
+    : []
+  const gatewayTtlMinutes = Number(raw.gatewayTtlMinutes) > 0 ? Number(raw.gatewayTtlMinutes) : 12 * 60
+  return { pricing, basis, autoOfficial, usdToCny, gateways, gatewayTtlMs: gatewayTtlMinutes * 60_000 }
 }
 
 /**
@@ -375,14 +586,55 @@ export function apply(ctx, config) {
     return inflight
   }
 
+  /**
+   * L2 gateway prices, cached per provider. A failed refresh keeps the previous
+   * answer: an offline relay must not degrade a working estimate.
+   */
+  const gatewayCache = new Map()
+  let gatewayInflight
+
+  async function gatewaysNow() {
+    if (settings.gateways.length === 0) return gatewayCache
+    const stale = settings.gateways.some((gateway) => {
+      const cached = gatewayCache.get(gateway.provider)
+      return cached === undefined || Date.now() - cached.at > settings.gatewayTtlMs
+    })
+    if (!stale) return gatewayCache
+    if (gatewayInflight === undefined) {
+      gatewayInflight = (async () => {
+        const fetchImpl = typeof fetch === 'function' ? fetch : undefined
+        for (const gateway of settings.gateways) {
+          const prices = await fetchGatewayPrices(gateway, settings.usdToCny, fetchImpl)
+          if (prices.size > 0) gatewayCache.set(gateway.provider, { at: Date.now(), prices })
+        }
+      })().finally(() => {
+        gatewayInflight = undefined
+      })
+    }
+    await gatewayInflight
+    return gatewayCache
+  }
+
   async function stats(offsetMinutes) {
-    const pass = await rowsNow()
-    const folded = buildViews(pass.rows, settings.pricing, offsetMinutes, Date.now())
+    const [pass, gateways] = await Promise.all([rowsNow(), gatewaysNow()])
+    const priceMap = new Map([...gateways].map(([provider, entry]) => [provider, entry.prices]))
+    const folded = buildViews(
+      pass.rows,
+      (row) => resolveRowPrice(row, settings, priceMap),
+      offsetMinutes,
+      Date.now(),
+    )
     return {
       currency: 'CNY',
       unit: 'per-million-tokens',
       estimate: true,
       basis: settings.basis,
+      pricing: {
+        autoOfficial: settings.autoOfficial,
+        usdToCny: settings.usdToCny,
+        gatewaysConfigured: settings.gateways.map((gateway) => gateway.provider),
+        gatewaysLoaded: [...priceMap.keys()],
+      },
       generatedAt: Date.now(),
       timezoneOffsetMinutes: offsetMinutes,
       scanMs: pass.scanMs,

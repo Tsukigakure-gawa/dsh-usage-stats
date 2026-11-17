@@ -44,6 +44,8 @@ window.__ModuleLoader__.load({
         columnTokens: 'Tokens',
         columnCost: 'Est. CNY',
         unpriced: 'No rate configured',
+        sourceOfficial: 'list price',
+        sourceGateway: 'gateway price',
         unpricedNote: 'Providers without a rate rule count tokens but add no cost:',
         basisLabel: 'Rate basis',
         pricingNote: 'Rates are CNY per 1M tokens — edit',
@@ -81,6 +83,8 @@ window.__ModuleLoader__.load({
         columnTokens: 'tokens',
         columnCost: '估算 ¥',
         unpriced: '未配置单价',
+        sourceOfficial: '参考价',
+        sourceGateway: '网关价',
         unpricedNote: '未配置单价的供应商只计 tokens、不计金额：',
         basisLabel: '单价依据',
         pricingNote: '单价为「元 / 百万 token」，改',
@@ -482,7 +486,15 @@ window.__ModuleLoader__.load({
                                 'div',
                                 { className: 'dsh-us-model', title: model.key },
                                 model.key,
-                                model.priced ? null : h('span', { className: 'dsh-us-model-tag' }, `· ${texts.unpriced}`),
+                                model.priced
+                                  ? model.priceSource === 'official' || model.priceSource === 'gateway'
+                                    ? h(
+                                        'span',
+                                        { className: 'dsh-us-model-tag' },
+                                        `· ${model.priceSource === 'official' ? texts.sourceOfficial : texts.sourceGateway}`,
+                                      )
+                                    : null
+                                  : h('span', { className: 'dsh-us-model-tag' }, `· ${texts.unpriced}`),
                               ),
                               h('div', null, formatTokens(model.tokens)),
                               h('div', null, model.priced ? formatMoney(model.cost, texts) : '—'),

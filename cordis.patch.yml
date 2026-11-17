@@ -3,27 +3,39 @@
 # One Host row: it registers the /usage-stats/api prefix route that the Client
 # half reads.
 #
-# `pricing` rules are CNY per 1M tokens and come in two shapes:
+# Prices resolve in four layers (highest priority first):
+#   L0  config.pricing below   — your own overrides
+#   L1  built-in table         — normalized model name -> reference list price
+#   L2  gateways below         — prices the relay itself publishes
+#   L3  none                   — tokens only; the page flags the model
+#
+# `pricing` rules are CNY per 1M tokens, two shapes:
 #   'provider/model': { rate: 5.25 }                               # one blended price
 #   'provider/*':     { cacheMiss: 2, cacheHit: 0.5, output: 8 }    # split price
-# Matching order: `provider/model` -> `provider/*` -> `*`. A model with no
-# matching rule still counts tokens, but adds no cost (the page lists it).
+# Matching order: `provider/model` -> `provider/*` -> `*`.
 #
-# The values below are PLACEHOLDERS. Replace them with rates derived from your
-# own invoice (amount / tokens * 1e6); an invoice states money over tokens and
-# never the cache-miss/hit/output split, so the blended `rate` shape is usually
-# the honest one.
+# `gateways` lets the Host ask a relay for its own price list:
+#   kind: 'openrouter'  -> GET {baseUrl}/v1/models  (pricing.prompt/completion, USD/token)
+#   kind: 'oneapi'      -> GET {baseUrl}/api/pricing or /api/models  (model_ratio)
+# Results are cached for `gatewayTtlMinutes` (default 12h). A relay that hides
+# its prices or is offline just falls through to L1/L3.
 - insert:
     - id: usage-stats
       name: 'dsh-usage-stats'
       config:
-        basis: '示例单价，请按自己的账单改'
+        basis: '自动匹配：L1 参考价 / L2 网关自报价，config.pricing 可覆盖'
+        autoOfficial: true
+        usdToCny: 7.2
+        # gateways:
+        #   - provider: 'my-relay'          # must equal message.source.provider
+        #     baseUrl: 'https://relay.example.com'
+        #     kind: 'openrouter'            # or 'oneapi'
+        #     # apiKey: 'sk-...'            # only if the site needs a token to read /models
         pricing:
-          '*':
-            rate: 1.0
-          'example-provider/*':
-            rate: 1.0
-          'example-provider/big-model':
-            cacheMiss: 15
-            cacheHit: 1.5
-            output: 75
+          # L0 examples; delete these to rely on L1/L2 only.
+          # 'my-relay/*':
+          #   rate: 2.5
+          # 'my-relay/big-model':
+          #   cacheMiss: 15
+          #   cacheHit: 1.5
+          #   output: 75

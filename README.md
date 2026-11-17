@@ -2,8 +2,9 @@
 
 DeepSeek Harness 插件：在**设置页**里加一个「用量统计」区块，按时间段显示 token 用量与**估算**花费。
 
-> 花费是估算，不是账单。插件把会话日志里每次模型调用的 `usage` 折成时段桶，再乘你在配置里填的单价。
-> 想要接近真实账单，请用自己账单反推单价后填进 `config.pricing`（见下文）。
+> 花费是估算，不是账单。插件把会话日志里每次模型调用的 `usage` 折成时段桶，再按四层价格解析链算钱：
+> 你的覆盖 → 内置参考价 → **中转站自报价** → 只计 tokens。
+> 每个模型旁边会标出这个价格是**哪来的**（参考价 / 网关价 / 未配置）。
 
 ---
 
@@ -13,53 +14,75 @@ DeepSeek Harness 插件：在**设置页**里加一个「用量统计」区块�
 
 - **四个时间段**：今日（按小时）、近 7 天（按天）、近 30 天（按天）、全部（按月）
 - **每个桶里**：输入 / 输出 / 缓存读 / 缓存写 tokens，以及估算金额（¥）
-- **按模型明细**：每个 `provider/model` 的合计（全部时间）
-- **未配置单价的模型**会单独列出来，只计 tokens 不算钱 —— 页面会把它们列在下面提醒你
+- **按模型明细**：每个 `provider/model` 的合计，带价格来源标签
+- **未定价的模型**单独列出，只计 tokens，页面底部提示
 
-## 安装
+## 装完之后基本不用配
 
-1. 把整个目录放进 Harness profile 的 `node_modules/` 下，目录名 `dsh-usage-stats`
-2. 在 profile 的 Cordis 配置里应用 `cordis.patch.yml`（它只插入一行 Host 配置）
-3. 重启 / 重载 Harness，打开 **设置 → 用量统计**
+如果你用的是常见模型（DeepSeek / Claude / GPT / Gemini 系列），**开箱就会自动匹配价格**——
+中转站把 provider 名字改成什么样都不影响，插件会把模型名归一化后再查表：
 
-> 依赖 Harness 的「设置页扩展」与「同源自定义路由」两个能力。Host 半边读会话日志，
-> Client 半边只做渲染；不需要额外服务、不写任何文件、不联网。
+```
+fluxtoken/claude-3-5-sonnet-20241022  →  claude-3-5-sonnet  →  按 Sonnet 参考价
+anyproxy/openai/gpt-4o-mini[128k]     →  gpt-4o-mini        →  按 4o-mini 参考价
+xx-api/deepseek-v3:free               →  deepseek-v3:free   →  按 DeepSeek 价
+```
 
-## 配置单价（关键一步）
+## 让插件直接问中转站要价格（推荐）
 
-打开 `cordis.patch.yml`，改 `usage-stats` 这一行的 `config.pricing`。单位是 **元 / 百万 token**。
+多数中转站自己就公布价格。在 `cordis.patch.yml` 里加一条：
 
-两种写法：
+```yaml
+config:
+  gateways:
+    - provider: 'my-relay'                    # 必须等于日志里的 message.source.provider
+      baseUrl: 'https://relay.example.com'
+      kind: 'openrouter'                      # 或 'oneapi'
+      # apiKey: 'sk-...'                      # 站点允许匿名读 /models 就不用填
+```
+
+- `kind: openrouter` → 读 `/v1/models` 里的 `pricing.prompt/completion`（USD/token）
+- `kind: oneapi` → 读 `/api/pricing` 或 `/api/models` 里的 `model_ratio`（one-api / new-api 家族）
+
+抓到后**缓存 12 小时**（`gatewayTtlMinutes` 可改）。站点不给价格、返回 404、断网，都只会退回上一层，
+不影响统计本身。
+
+## 手动覆盖（想钉死某个价格时）
 
 ```yaml
 pricing:
-  # ① 混合均价：所有 token 一个价（账单只给「总金额 ÷ 总 tokens」时用这个）
-  'my-provider/*':
-    rate: 1.23
-
-  # ② 分档价：你手上有 cache / 输出 的拆分时用
-  'my-provider/big-model':
-    cacheMiss: 15
+  'my-relay/*':
+    rate: 2.5                    # 混合均价，元 / 百万 token
+  'my-relay/big-model':
+    cacheMiss: 15                # 分档价
     cacheHit: 1.5
     output: 75
 ```
 
-匹配顺序：`provider/model` → `provider/*` → `*`。
-分档形状下 **cacheWrite 计入 cacheMiss**。
+匹配顺序：`provider/model` → `provider/*` → `*`。**覆盖 > 参考价 > 网关价**。
+分档形状下 cacheWrite 计入 cacheMiss。
 
-**怎么反推单价**：拿一次账单，`金额 ÷ tokens × 1,000,000`。
-如果账单只有一个总数，就用混合均价；同一 provider 内不同模型价格差很多时，
-建议拆成 `provider/model` 逐条填。
+**怎么反推单价**：`账单金额 ÷ tokens × 1,000,000`。账单只给总数时就用混合均价。
 
-`basis` 是页脚展示的一句说明，写成你这次的依据就行（例如「2026-11 账单反推」）。
+## 页面上的价格来源
+
+| 标签 | 含义 |
+| --- | --- |
+| 参考价 | 内置表的公开标价（按 `usdToCny` 换算，会过期） |
+| 网关价 | 中转站自己公布的价 |
+| 手动覆盖 | 你在 `pricing` 里写的 |
+| 未配置单价 | 三样都没命中，只计 tokens |
+
+内置表**明确是近似值**：公开标价会变，汇率也会变（`usdToCny` 默认 7.2）。
+要精确就把覆盖写上——覆盖永远优先。
 
 ## 已知限制
 
 - 估算按「单价 × tokens」算；同一 provider 内缓存命中率波动大时会有偏差
 - 只统计 `assistant/message` 里记录的调用；日志被重写覆盖的调用仍计入（钱确实花了）
 - 只统计**这台机器这份 Harness** 的用量；同账号在别处消费不会出现在这里
-- 时区按浏览器当前 UTC 偏移分桶；换时区后历史桶会按新偏移重算
-- 首次打开要重放全部历史会话（约 1–5 秒，取决于日志体积），之后只重放变化过的会话
+- 未识别的模型名（各站自定义别名）只会落到「未配置单价」
+- 首次打开要重放全部历史会话（约 1–5 秒），之后只重放变化过的会话
 
 ## 许可
 
@@ -69,75 +92,102 @@ pricing:
 
 # 第二部分：给 agent 看
 
-> 这一节是给自动化 agent / 未来的维护者看的：契约、不变量、易错点。
+> 契约、不变量、易错点。改代码前先读这一节。
 
 ## 文件地图
 
 | 文件 | 角色 |
 | --- | --- |
-| `index.js` | **Host 半边**：注册同源路由、扫描会话日志、折叠成时段桶、算钱 |
-| `client.js` | **Client 半边**：设置页区块组件，`fetch` 同源路由并渲染 |
-| `cordis.patch.yml` | 唯一一行 Host 配置插入（`id: usage-stats`），含 `pricing` / `basis` |
-| `locale/en.json`、`locale/zh.json` | 文案；键名两边必须对称 |
+| `index.js` | **Host**：同源路由、扫描会话日志、折叠时段桶、**四层价格解析**、L2 抓取 |
+| `client.js` | **Client**：设置页组件，`fetch` 同源路由并渲染（含价格来源标签） |
+| `cordis.patch.yml` | 唯一一行 Host 配置插入（`id: usage-stats`） |
+| `locale/{en,zh}.json` | 设置页条目的标题/描述；UI 文案内联在 `client.js` 的 `texts` |
 | `icon.svg` | 设置页图标 |
 | `package.json` | `exports` 映射与 `dsh.bundle` / `dsh.client` 声明 |
 
-## 数据通路（必须保持）
+## 数据通路
 
 ```
-Client (设置页)  --POST /usage-stats/api/stats-->  Host (index.js)
-                                                     ↓ 读 $DSH_HOME/sessions
-                                                     ↓ 折叠 assistant/message.usage
-                                                     ← 同源 JSON
+Client --POST /usage-stats/api/stats--> Host
+                                         ├─ 读 $DSH_HOME/sessions
+                                         ├─ 折叠 assistant/message.usage
+                                         ├─ 解析价格（L0 → L1 → L2）
+                                         └─ 同源 JSON（含每个模型的 priceSource）
 ```
 
-- 只有一条路由：`/usage-stats/api/stats`（`ROUTE_PREFIX` = `/usage-stats/api`）
-- Host 侧用 `ctx.connection.requestRejection` 做同源信任栅栏；**不要**去掉
+- 唯一路由：`/usage-stats/api/stats`（`ROUTE_PREFIX = /usage-stats/api`）
+- `ctx.connection.requestRejection` 是同源信任栅栏，**不能去掉**
 - 请求体上限 `MAX_BODY_BYTES = 64 KiB`
-- 不写文件、不联网、不新增存储：统计完全来自会话日志的折叠
+- 不写文件；唯一的对外请求是 L2 抓网关价目（每个 provider 每 TTL 一次）
 
-## 折叠规则（不变量）
+## 价格解析链（顺序不可换）
 
-1. 每条 `assistant/message` 的 `usage` 取 `inputTokens` / `outputTokens` /
-   `cacheReadTokens` / `cacheWriteTokens`，非有限或负值按 0（`num()`）
-2. 模型身份取 `message.source.{provider,model}`，缺失时用 `unknown`
-3. **日志重写不退款**：被 surface replace 覆盖的副本仍计入
-4. 增量重放依据 `sessionPersistence.stat` 的 revision：没变过的会话跳过
-5. 分桶按调用方传入的 `tzOffsetMinutes`（浏览器 UTC 偏移），并对越界值钳制
-   （`MAX_TZ_MINUTES = 840`）
-6. 花费 = `tokens / 1e6 × rate`；分档形状下 cacheWrite 归入 cacheMiss
-7. 没有匹配规则的模型：计 tokens，**不计钱**，并在响应里列出，供页面提示
+| 层 | 函数 | 命中条件 | `priceSource` |
+| --- | --- | --- | --- |
+| L0 | `resolvePrice(settings.pricing, key)` | 精确键 → `provider/*` → `*` | `override` |
+| L1 | `officialPriceOf(canonicalModel(key), usdToCny)` | 内置表正则命中 | `official` |
+| L2 | `gatewayCache.get(provider)` → `get(canonical)` → `get('*')` | 网关之前抓到过 | `gateway` |
+| L3 | — | 都没命中 | `none` |
 
-## 配置 schema（`config`）
+- `autoOfficial: false` 可关掉 L1（只想用覆盖和网关价时）
+- L2 只对**同一个 provider** 生效：`provider` 取 `key` 第一个 `/` 之前的部分
+- L2 失败**不抛错**，保留上一次结果；`fetchGatewayPrices` 内部吞掉所有异常
+
+## 名称归一化（`canonicalModel`）
+
+顺序：去 `provider/` 前缀 → 去模型名自带的 vendor 前缀 → 去 `-20241022` / `-2024-10-22` →
+去 `[128k]` / `[1m]` → 去 `-latest|preview|beta|free|vN` → `_`→`-`。
+
+⚠️ **改这里等于改所有价格命中**：新增规则要让 `claude-3-5-sonnet` 这类常见写法仍然落到
+`claude.*sonnet` 正则上。改完用「归一化自测」一节的方法跑一遍。
+
+## 单价与换算
+
+- 内置表 `OFFICIAL_TABLE` 用 **USD/1M**（`{in, out}`），`fromUsd()` 换算成
+  `{cacheMiss, cacheHit: in×0.25, output}` 的 CNY 规则；`cacheHit` 取输入价 1/4 是**近似**
+- one-api：`quota = tokens × model_ratio × group_ratio`，`USD 1 = 500000 quota`
+  → `USD/1M = ratio × group × 2`；`completion_ratio` 拆输出价
+- OpenRouter：`pricing.prompt/completion` 是 **USD per token**，×1e6 后再换算
+- 覆盖里的 `{ rate }` 始终是「元 / 百万 token」，对所有 token 一价
+
+## 配置 schema
 
 ```ts
 {
-  basis?: string,                          // 页脚说明，纯文本
-  pricing?: {
-    [pattern: string]:                    // 'provider/model' | 'provider/*' | '*'
-      | { rate: number }                  // 混合均价，元/百万 token
-      | { cacheMiss: number, cacheHit: number, output: number }
-  }
+  basis?: string,                 // 页脚说明
+  autoOfficial?: boolean,         // 默认 true，关掉就只剩 L0/L2
+  usdToCny?: number,              // 默认 7.2
+  gatewayTtlMinutes?: number,     // 默认 720（12h）
+  gateways?: Array<{
+    provider: string,             // 必须等于 message.source.provider
+    baseUrl: string,
+    kind: 'openrouter' | 'oneapi',
+    apiKey?: string,              // 仅供读价目，不会写进日志
+  }>,
+  pricing?: { [pattern: string]: { rate: number } | { cacheMiss: number, cacheHit: number, output: number } }
 }
 ```
 
-匹配优先级：精确 `provider/model` → `provider/*` → `*`。
-`DEFAULT_PRICING` 里的值是**占位符**，只为开箱能跑；不要把它当成真实价格。
-
 ## 改动时容易踩的坑
 
-- **locale 键必须对称**：只加 `zh.json` 的键会让 `en` 语言下显示原始键名
-- **不要改路由前缀**：`client.js` 里 `new URL('usage-stats/api/stats', base)` 是相对路径，
-  改一边就会 404
-- **`document` 可能不存在**：`client.js` 用 `typeof document === 'undefined'` 兜底，
-  这样同一份代码能在非浏览器环境里被引用（保持这个判断）
-- **首次扫描的性能**：全量重放是 O(会话数 × 事件数)，别在里面加同步 IO
-- **金额精度**：全程用 number，展示时再格式化；不要在中间步骤四舍五入
+- **`DEFAULT_PRICING` 不要放 `'*'`**：会盖住 L1/L2。默认是空对象
+- **locale 键要对称**：`en` / `zh` 少一个键会显示原始键名；UI 文案在 `client.js` 的 `texts`
+- **不要改路由前缀**：`client.js` 用相对路径 `new URL('usage-stats/api/stats', base)`
+- **`document` 可能不存在**：`client.js` 里 `typeof document === 'undefined'` 的兜底要保留
+- **`priceSource` 必须回传**：Client 用它决定显示哪个标签
+- **L2 不要串 provider**：网关价只对配置里的那个 provider 生效
+- **首次扫描性能**：全量重放 O(会话数 × 事件数)，别在里面加同步 IO 或网络请求
 
-## 自检思路
+## 归一化自测（不需要启动 Harness）
 
-没有打包独立的测试脚本（历史脚本含本机绝对路径，已移除）。改动后建议：
+```powershell
+$env:ELECTRON_RUN_AS_NODE=1
+# 复制 index.js 并追加导出：
+#   export { canonicalModel, resolveRowPrice, buildViews }
+& "…\DeepSeek Harness.exe" run.mjs
+```
 
-1. 用真实 `$DSH_HOME/sessions` 跑一遍折叠，断言：总 tokens 与逐桶求和一致；
-2. 给 Client 组件喂一份构造的响应，检查文本里没有 `undefined` / `NaN`、金额带 `¥`；
-3. 换一个 `pricing` 规则（改 `cordis.patch.yml`）后重载，确认「未配置单价」列表相应变化。
+断言三件事：
+1. `canonicalModel('fluxtoken/claude-3-5-sonnet-20241022') === 'claude-3-5-sonnet'`
+2. 空 `pricing` + `autoOfficial: true` 时，`relay/claude-opus-4-8` 解析为 `official`
+3. 配了网关价后，未识别模型解析为 `gateway`；不配则 `none`
