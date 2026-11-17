@@ -82,7 +82,7 @@ const OFFICIAL_TABLE = [
  * Canonical model name: drop the provider prefix, the vendor prefix, date
  * stamps, `[128k]`-style tags and `-latest`/`-preview`/`-free` suffixes.
  *
- *   'fluxtoken/claude-3-5-sonnet-20241022' -> 'claude-3-5-sonnet'
+ *   'my-relay/claude-3-5-sonnet-20241022' -> 'claude-3-5-sonnet'
  *   'anyproxy/openai/gpt-4o-mini[128k]'    -> 'gpt-4o-mini'
  */
 function canonicalModel(key) {

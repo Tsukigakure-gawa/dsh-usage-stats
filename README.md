@@ -23,7 +23,7 @@ DeepSeek Harness 插件：在**设置页**里加一个「用量统计」区块�
 中转站把 provider 名字改成什么样都不影响，插件会把模型名归一化后再查表：
 
 ```
-fluxtoken/claude-3-5-sonnet-20241022  →  claude-3-5-sonnet  →  按 Sonnet 参考价
+my-relay/claude-3-5-sonnet-20241022  →  claude-3-5-sonnet  →  按 Sonnet 参考价
 anyproxy/openai/gpt-4o-mini[128k]     →  gpt-4o-mini        →  按 4o-mini 参考价
 xx-api/deepseek-v3:free               →  deepseek-v3:free   →  按 DeepSeek 价
 ```
@@ -188,6 +188,6 @@ $env:ELECTRON_RUN_AS_NODE=1
 ```
 
 断言三件事：
-1. `canonicalModel('fluxtoken/claude-3-5-sonnet-20241022') === 'claude-3-5-sonnet'`
+1. `canonicalModel('my-relay/claude-3-5-sonnet-20241022') === 'claude-3-5-sonnet'`
 2. 空 `pricing` + `autoOfficial: true` 时，`relay/claude-opus-4-8` 解析为 `official`
 3. 配了网关价后，未识别模型解析为 `gateway`；不配则 `none`
